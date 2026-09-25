@@ -1,14 +1,17 @@
 """Blender binding layer: turns a RigProfile into native Blender links.
 
 Everything here touches bpy and must run on the main thread (timer callbacks
-or operators). The links we create are plain Blender data — drivers on shape
-keys, constraints on bones, empties in a collection — so artists can inspect,
-tweak or delete them without the addon. Unbind sweeps by our markers.
+or operators). Design note: shape key values are written DIRECTLY by the
+capture consumer each tick (no f-curve drivers) — Blender 4.x does not build
+depsgraph dependencies for drivers whose target custom property is created
+after the driver, which made driver-based binding unreliable. Bone following
+stays native: COPY_LOCATION/COPY_ROTATION constraints toward the FPD empties,
+fully inspectable and removable by artists. Unbind sweeps by our markers.
 
 Naming/markers:
 - FPD empties live in collection "RealCapture Points", named RC_pt_<role>.
 - Bone constraints are named "RC_follow_<role>".
-- Driven shape keys get custom prop "rc_driven_channel".
+- Bound shape keys are listed in the mesh marker "rc_driven_shapekeys".
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ from .rigprofile.profile import BoneBinding, RigProfile
 POINTS_COLLECTION = "RealCapture Points"
 EMPTY_PREFIX = "RC_pt_"
 CONSTRAINT_PREFIX = "RC_follow_"
-DRIVEN_PROP = "rc_driven_channel"
+DRIVEN_PROP = "rc_driven_shapekeys"  # mesh-object marker: list of driven key names
 
 _AXIS_INDEX = {"X": 0, "Y": 1, "Z": 2}
 
@@ -30,16 +33,19 @@ class BindingError(RuntimeError):
 
 
 class FacePointRig:
-    """Runtime handle over the FPD empties; called by the consumer each tick.
+    """Runtime handle over the FPD empties and bound shape keys.
 
-    Holds (role, kind, axis) -> (empty, rest_value, gain, invert). Transform
-    entries accumulate per empty; the write is rest + sum(deltas), epsilon-
-    gated to avoid depsgraph churn.
+    Called by the consumer each tick. Transform entries accumulate per empty
+    (rest + sum(deltas)); shape key values are written directly from the
+    packet channels. All writes are epsilon-gated to avoid depsgraph churn.
     """
 
-    def __init__(self, entries: dict[str, list[dict]]) -> None:
+    def __init__(self, entries: dict[str, list[dict]],
+                 shape_entries: list[dict] | None = None) -> None:
         # entries[empty_name] = list of {kind, axis, gain, invert}
         self._entries = entries
+        # shape_entries = list of {key_block, channel, gain, invert}
+        self._shape_entries = shape_entries or []
 
     @property
     def empty_names(self) -> list[str]:
@@ -47,6 +53,14 @@ class FacePointRig:
 
     def apply(self, packet) -> None:  # noqa: ANN001 - schema.Packet
         values = packet.shapes
+        for entry in self._shape_entries:
+            key_block = entry["key_block"]
+            value = values.get(entry["channel"])
+            if value is None:
+                continue
+            target = entry["gain"] * (-value if entry["invert"] else value)
+            if abs(key_block.value - target) > 1e-4:
+                key_block.value = target
         for empty_name, transforms in self._entries.items():
             empty = bpy.data.objects.get(empty_name)
             if empty is None:
@@ -84,7 +98,7 @@ def bind_profile(profile: RigProfile, controller, meshes, armature) -> FacePoint
     unbind_all()
 
     empty_by_role = _create_empties(profile, armature)
-    _bind_shapekeys(profile, controller, meshes)
+    shape_entries = _collect_shapekey_entries(profile, meshes)
     _bind_bones(profile, armature, empty_by_role)
 
     # Accumulate transforms per empty for the runtime rig.
@@ -97,7 +111,7 @@ def bind_profile(profile: RigProfile, controller, meshes, armature) -> FacePoint
             "channel": tr.channel, "kind": tr.kind, "axis": tr.axis,
             "gain": tr.gain, "invert": tr.invert,
         })
-    return FacePointRig({k: v for k, v in entries.items() if v})
+    return FacePointRig({k: v for k, v in entries.items() if v}, shape_entries)
 
 
 # -- creation ----------------------------------------------------------------
@@ -160,36 +174,33 @@ def _guess_head_bone(armature) -> str | None:  # noqa: ANN001
     return None
 
 
-def _bind_shapekeys(profile: RigProfile, controller, meshes) -> None:  # noqa: ANN001
-    """Create drivers: shape key value <- controller rc_shape_<channel> prop.
+def _collect_shapekey_entries(profile: RigProfile, meshes) -> list[dict]:  # noqa: ANN001
+    """Resolve shape key bindings to runtime entries written by the consumer.
 
-    Uses a GENERATOR f-curve modifier (y = b + a*x) instead of a scripted
-    expression, so bindings work without 'Auto Run Python Scripts'.
+    Values go straight to key_block.value each tick; no f-curve drivers (see
+    module docstring). Any leftover RealCapture drivers from older versions
+    are removed as cleanup.
     """
-    bound = 0
+    entries: list[dict] = []
+    marked: dict[int, str] = {}  # id(mesh) -> mesh with marker
     for binding in profile.shapekey_bindings:
-        prop = f'rc_shape_{binding.channel}'
         for mesh in meshes:
             key_blocks = _shape_keys_of(mesh)
             if key_blocks is None or binding.target not in key_blocks:
                 continue
             key_block = key_blocks[binding.target]
-            key_block[DRIVEN_PROP] = binding.channel
             _remove_key_driver(key_block)
-            fcurve = key_block.driver_add("value")
-            var = fcurve.driver.variables.new()
-            var.name = "var"
-            var.type = "SINGLE_PROP"
-            var.targets[0].id = controller
-            var.targets[0].data_path = f'["{prop}"]'
-            generator = fcurve.modifiers.new(type="GENERATOR")
-            if binding.invert:
-                generator.coefficients = (binding.gain, -binding.gain)
-            else:
-                generator.coefficients = (0.0, binding.gain)
-            bound += 1
-    if profile.shapekey_bindings and bound == 0:
-        raise BindingError("No shape key binding could be created: check mesh selection")
+            entries.append({"key_block": key_block, "channel": binding.channel,
+                            "gain": binding.gain, "invert": binding.invert})
+            driven = list(mesh.get(DRIVEN_PROP, []))
+            if binding.target not in driven:
+                driven.append(binding.target)
+            mesh[DRIVEN_PROP] = driven
+            marked[id(mesh)] = mesh
+    if profile.shapekey_bindings and not entries:
+        raise BindingError(
+            "No shape key binding could be created: check mesh selection")
+    return entries
 
 
 def _remove_key_driver(key_block) -> None:  # noqa: ANN001
@@ -238,21 +249,38 @@ _CONSTRAINT_TYPES = {
 
 def unbind_all() -> None:
     """Remove every RealCapture binding marker from the scene. Idempotent."""
-    # Shape key drivers
-    for mesh in bpy.data.meshes:
-        key_blocks = getattr(mesh, "shape_keys", None)
+    # Shape key drivers (legacy cleanup): remove key-block drivers whose
+    # variables read rc_shape_*
+    for mesh in bpy.data.objects:
+        if mesh.type != "MESH":
+            continue
+        key_blocks = getattr(mesh.data, "shape_keys", None)
         if not key_blocks:
             continue
-        for key_block in key_blocks.key_blocks:
-            if key_block.get(DRIVEN_PROP) is not None:
-                try:
-                    key_block.driver_remove("value")
-                except RuntimeError:
-                    pass
-                del key_block[DRIVEN_PROP]
+        animation_data = key_blocks.animation_data
+        if animation_data and animation_data.drivers:
+            for fcurve in list(animation_data.drivers):
+                data_path = fcurve.data_path
+                if not data_path.startswith("key_blocks["):
+                    continue
+                reads_capture = any(
+                    "rc_shape_" in (target.data_path or "")
+                    for var in fcurve.driver.variables
+                    for target in var.targets)
+                if reads_capture:
+                    try:
+                        animation_data.driver_remove(data_path)
+                    except RuntimeError:
+                        pass
+        if mesh.get(DRIVEN_PROP):
+            # Assign instead of pop: idprop removal inside an operator context
+            # can silently miss (Blender 4.x); an empty list means unbound.
+            mesh[DRIVEN_PROP] = []
     # Bone constraints
-    for armature in bpy.data.armatures:
-        for pose_bone in armature.pose_bones:
+    for armature_obj in bpy.data.objects:
+        if armature_obj.type != "ARMATURE":
+            continue
+        for pose_bone in armature_obj.pose.bones:
             for constraint in [c for c in pose_bone.constraints
                                if c.name.startswith(CONSTRAINT_PREFIX)]:
                 pose_bone.constraints.remove(constraint)

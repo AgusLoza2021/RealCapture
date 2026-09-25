@@ -58,8 +58,8 @@ def build_profile(
 
 def as_matcher_proposals(items) -> list[Proposal]:
     """Rebuild matcher Proposals from wizard review rows (duck-typed: .key,
-    .target, .confidence attributes — no bpy import needed)."""
-    return [Proposal(key=item.key, kind="shapekey", target=item.target,
+    .kind, .target, .confidence attributes — no bpy import needed)."""
+    return [Proposal(key=item.key, kind=item.kind, target=item.target,
                      confidence=item.confidence, reason="review")
             for item in items]
 

@@ -49,7 +49,7 @@ class REALCAPTURE_OT_scan_rig(bpy.types.Operator):
 
     bl_idname = "realcapture.scan_rig"
     bl_label = "Scan & Auto-Match Rig"
-    bl_options = {"REGISTER", "UNDO"}
+    bl_options = {"REGISTER"}
 
     def execute(self, context):
         settings = _settings(context)
@@ -82,7 +82,7 @@ class REALCAPTURE_OT_bind_rig(bpy.types.Operator):
 
     bl_idname = "realcapture.bind_rig"
     bl_label = "Build & Bind"
-    bl_options = {"REGISTER", "UNDO"}
+    bl_options = {"REGISTER"}
 
     def execute(self, context):
         settings = _settings(context)
@@ -119,8 +119,8 @@ class REALCAPTURE_OT_bind_rig(bpy.types.Operator):
 
         _store_face_points(context, face_points, profile)
         self.report({"INFO"},
-                    f"Bound: {len(profile.shapekey_bindings)} shape keys, "
-                    f"{len(profile.bone_bindings)} bones, "
+                    f"Bound: {len(profile.shapekey_bindings)} shape keys "
+                    f"(consumer-driven), {len(profile.bone_bindings)} bones, "
                     f"{len(profile.points)} point transforms. "
                     f"Profile saved to {settings.rig_profile_path}")
         return {"FINISHED"}
@@ -131,7 +131,7 @@ class REALCAPTURE_OT_unbind_rig(bpy.types.Operator):
 
     bl_idname = "realcapture.unbind_rig"
     bl_label = "Unbind All"
-    bl_options = {"REGISTER", "UNDO"}
+    bl_options = {"REGISTER"}
 
     def execute(self, context):
         binding.unbind_all()
@@ -145,7 +145,7 @@ class REALCAPTURE_OT_load_profile(bpy.types.Operator):
 
     bl_idname = "realcapture.load_profile"
     bl_label = "Load Profile & Bind"
-    bl_options = {"REGISTER", "UNDO"}
+    bl_options = {"REGISTER"}
 
     def execute(self, context):
         settings = _settings(context)
