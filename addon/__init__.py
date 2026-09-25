@@ -26,14 +26,16 @@ bl_info = {
 
 
 def register() -> None:
-    from . import properties, ui  # lazy: these import bpy
+    from . import properties, ui, wizard  # lazy: these import bpy
 
-    ui.register()
     properties.register()
+    wizard.register()
+    ui.register()
 
 
 def unregister() -> None:
-    from . import properties, ui  # lazy: these import bpy
+    from . import properties, ui, wizard  # lazy: these import bpy
 
     ui.unregister()
+    wizard.unregister()
     properties.unregister()

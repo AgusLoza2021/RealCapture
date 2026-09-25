@@ -13,3 +13,4 @@ __all__ = [
     "BoneBinding", "PointTransform", "ProfileError", "RigProfile",
     "ShapeKeyBinding", "Proposal", "match_bones", "match_shapekeys",
 ]
+

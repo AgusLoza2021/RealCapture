@@ -42,6 +42,8 @@ class CaptureConsumer:
         self._timer_registered = False
         self.stats = CaptureStats()
         self._last_values: dict[str, float] = {}
+        # Optional FacePointRig (set by the rig-connector bind operator).
+        self.face_points = None
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -135,6 +137,9 @@ class CaptureConsumer:
 
         if self.recorder is not None and self.recorder.is_recording:
             self.recorder.record(packet, int(time.time() * 1000.0))
+
+        if self.face_points is not None:
+            self.face_points.apply(packet)
 
         if self._replay is not None:
             # Replayed packets carry the original send time; transport latency

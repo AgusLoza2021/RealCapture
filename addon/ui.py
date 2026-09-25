@@ -153,11 +153,56 @@ class RC_PT_main_panel(bpy.types.Panel):
         col.label(text='  controller["rc_pose_<rx..tz>"]')
 
 
+class RC_PT_rig_connector_panel(bpy.types.Panel):
+    bl_label = "Rig Connector"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "RealCapture"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        layout = self.layout
+        settings = context.scene.realcapture
+
+        col = layout.column()
+        col.prop(settings, "rig_face_mesh")
+        col.prop(settings, "rig_armature")
+        col.prop(settings, "rig_head_bone")
+
+        row = col.row(align=True)
+        row.operator("realcapture.scan_rig", icon="VIEWZOOM", text="Scan & Auto-Match")
+
+        if len(settings.rig_proposals):
+            box = layout.box()
+            box.label(text=f"Review bindings ({len(settings.rig_proposals)}):",
+                      icon="CHECKLIST")
+            for item in settings.rig_proposals:
+                row = box.row(align=True)
+                row.prop(item, "include", text="")
+                sub = row.row()
+                sub.alignment = "LEFT"
+                sub.enabled = False  # read-only review row
+                sub.label(text=f"{item.key} -> {item.target}")
+                right = row.row()
+                right.alignment = "RIGHT"
+                right.enabled = False
+                right.label(text=f"{item.confidence:.2f}")
+
+        row = layout.row(align=True)
+        row.operator("realcapture.bind_rig", icon="LINKED", text="Build & Bind")
+        row.operator("realcapture.unbind_rig", icon="UNLINKED", text="Unbind")
+
+        col = layout.column(align=True)
+        col.prop(settings, "rig_profile_path")
+        col.operator("realcapture.load_profile", icon="FILE_TICK", text="Load Profile & Bind")
+
+
 classes = (
     RC_OT_start_capture,
     RC_OT_stop_capture,
     RC_OT_replay_session,
     RC_PT_main_panel,
+    RC_PT_rig_connector_panel,
 )
 
 
