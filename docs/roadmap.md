@@ -13,15 +13,15 @@ Rules: one milestone active at a time; no milestone starts before the previous o
 - [x] TDD v0.1
 - [ ] Roadmap reviewed by author
 - [x] Git repository initialized, M0 committed — `cefe2a0`
-- [ ] Public README stub (positioning + IP note, no methodology)
+- [x] Public README stub (positioning + IP note, no methodology) — `README.md`, added 2026-09-25; points at this roadmap as the single status source instead of restating milestone states
 
 **Exit criteria:** docs reviewed; repo has M0 commit.
 
 > **Rule conflict surfaced 2026-09-25 (recorded, not hidden).** M1's implementation is
 > complete while M0 is still open, which violates "no milestone starts before the previous
-> one's exit criteria are met". M0's two open items are one owner action (`Roadmap reviewed
-> by author`) and one small artifact (`Public README stub`, which does not exist yet).
-> Closing those two restores the rule instead of weakening it.
+> one's exit criteria are met". Of M0's two open items, the README stub is now written;
+> what remains is one owner action (`Roadmap reviewed by author`). Completing that closes
+> M0 and restores the rule instead of weakening it.
 
 ## M1 — Stabilization Harness — `In progress`
 Goal: trustworthy plumbing before feature work.
@@ -45,7 +45,16 @@ Goal: trustworthy plumbing before feature work.
 > capture and inference are excluded from this metric by construction. The "reference scene"
 > number this criterion names therefore still has no measurement point; choosing one (a stamp
 > at frame grab, or an external end-to-end observer) is an open owner decision.
-> Details and follow-ups: `odd/tasks/milestone-closure-m0-m1.md`.
+>
+> Hardened 2026-09-25 so the same class of failure cannot pass again: the gate logic moved to
+> the pure, unit-testable `tools/soak_gates.py`; it now fails on a zero (dead) measurement, on
+> the **session-wide** latency max rather than a 120-sample window, and on an opt-in positive
+> control (`tools/soak_send.py --stamp-skew-ms` plus an expected floor argument). Demonstrated
+> both ways on real runs: clean run passes at avg 9.4 ms / session max 19.1 ms, and a 150 ms
+> injected skew is measured as avg 158.1 ms, failing the gate with exit 1. The previously
+> recorded pre-fix report now fails the gate instead of passing it.
+> Details and follow-ups: `odd/tasks/milestone-closure-m0-m1.md`,
+> `odd/tasks/m1-latency-gate-hardening.md`.
 
 ## M2 — Expression Fidelity — `Open`
 Goal: capture that looks right, not just moves.

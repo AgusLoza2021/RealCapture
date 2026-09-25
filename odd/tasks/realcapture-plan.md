@@ -15,7 +15,7 @@ Research the real-time facial capture landscape and produce the planning documen
 - [x] Write docs/roadmap.md (milestones M0–M5)
 - [x] Locked decisions: both backends (MediaPipe default + OpenSeeFace alt), Blender 4.2 LTS, Windows-first
 - [x] Git repository initialized, M0 committed — commit cefe2a0 (docs: add TDD v0.1, roadmap (M0-M5), and capture-landscape research)
-- [ ] Public README stub (positioning + IP note, no methodology) — the last open M0 item; no root `README.md` exists yet
+- [x] Public README stub (positioning + IP note, no methodology) — `README.md` added 2026-09-25; it points at `docs/roadmap.md` as the single status source rather than duplicating milestone states
 - [ ] Review workload check: split docs into reviewable work-unit commits
 
 ## Constraints

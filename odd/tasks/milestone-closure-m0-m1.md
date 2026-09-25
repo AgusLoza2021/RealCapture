@@ -6,11 +6,12 @@ TDD: RED-first for the telemetry defect. Runner: `python -m pytest tests/ -q`;
 Blender 4.5 headless for the transport measurement.
 
 **Delivered 2026-09-25:** T1–T5 (roadmap reconciled, defect fixed under RED-first, real
-measurement produced, status set honestly). **Still open and owner-owned:** T6 (full 30-minute
-re-run on the fixed code) and T9 (choose the measurement point for the camera + inference
-segment, or reword the criterion). **Sunset into its own feature doc:** T7 and T8, now
-`odd/tasks/m1-latency-gate-hardening.md`, because they are code-and-test work that can be
-picked up without an owner decision.
+measurement produced, status set honestly), plus the M0 README stub. **Still open and
+owner-owned:** T6 (full 30-minute re-run on the fixed code) and T9 (choose the measurement
+point for the camera + inference segment, or reword the criterion). **T7 and T8 landed and
+were verified in their own feature doc**, `odd/tasks/m1-latency-gate-hardening.md`: the gate is
+no longer vacuous (it exits 1 on a real 158 ms measurement), and the weak tests it exposed are
+tightened.
 
 ## Goal
 
@@ -106,8 +107,8 @@ packet's own stamp so replay still reports zero deliberately rather than by acci
 | T4 | Headless Blender measurement over the real UDP transport; record the labelled segment | done 2026-09-25 |
 | T5 | Record evidence here and set the M1 status honestly | done 2026-09-25 |
 | T6 | (owner decision) re-run the full 30-minute soak for the closure record | not started |
-| T7 | Make the soak latency gate non-vacuous: lower bound + a session-wide max instead of the 120-sample window | moved to `odd/tasks/m1-latency-gate-hardening.md` |
-| T8 | Strengthen `tests/test_telemetry.py` so each test is discriminating for the clock-domain fix (see finding 1) | moved to `odd/tasks/m1-latency-gate-hardening.md` |
+| T7 | Make the soak latency gate non-vacuous: lower bound + a session-wide max instead of the 120-sample window | done — `odd/tasks/m1-latency-gate-hardening.md`, verified: gate exits 1 at avg 158.1 ms / session max 168.3 ms |
+| T8 | Strengthen `tests/test_telemetry.py` so each test is discriminating for the clock-domain fix (see finding 1) | done — the three tests now fail against the pre-fix clock on assertions, not on arity |
 | T9 | (owner decision) choose the measurement point for the camera + inference segment, or reword the M1 criterion | blocked on owner |
 
 ## Evidence
