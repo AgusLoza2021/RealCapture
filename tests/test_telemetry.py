@@ -51,15 +51,27 @@ def test_explicit_epoch_stamp_is_used_for_latency():
     assert stats.avg_transport_ms == pytest.approx(7.0, abs=0.5)
 
 
-def test_negative_difference_is_clamped_to_zero():
-    """A backwards clock jump (applied epoch before the send stamp) never goes negative."""
+def test_negative_epoch_difference_clamps_without_erasing_positive_samples():
+    """Property: a per-sample backwards epoch difference clamps to 0.0, but the
+    clamp never erases real positive samples from the same session.
+
+    Fails against an implementation that subtracts mismatched clocks: there,
+    even the positive sample clamps to 0.0, so avg and max stay 0.0.
+    """
     now = time.time()
     now_ms = int(now * 1000)
-    packet = make_packet(t=now_ms + 1000)
     stats = CaptureStats()
-    stats.record_applied(packet, time.monotonic() * 1000.0, float(now_ms))
-    assert stats.max_transport_ms == 0.0
-    assert stats.avg_transport_ms == 0.0
+    # First: a real positive sample, 6 epoch-ms of transport latency.
+    stats.record_applied(make_packet(t=now_ms - 6), time.monotonic() * 1000.0, float(now_ms))
+    assert stats.max_transport_ms == pytest.approx(6.0, abs=0.5)
+    # Then: a backwards clock jump (applied epoch 1000 ms before the send stamp).
+    stats.record_applied(
+        make_packet(t=now_ms + 1000), time.monotonic() * 1000.0, float(now_ms - 1000)
+    )
+    # The backwards sample clamps, but the earlier real sample survives.
+    assert stats.max_transport_ms == pytest.approx(6.0, abs=0.5)
+    assert stats.avg_transport_ms == pytest.approx(3.0, abs=0.5)
+    assert stats.session_max_transport_ms == pytest.approx(6.0, abs=0.5)
 
 
 def test_avg_max_over_rolling_window_and_reset():
@@ -90,8 +102,10 @@ def test_avg_max_over_rolling_window_and_reset():
     assert stats.packets_applied == 0
 
 
-def test_fps_still_uses_monotonic_clock():
-    """FPS is a rate: it derives from monotonic spacing and ignores the epoch stamps."""
+def test_fps_uses_monotonic_clock_while_latency_uses_epoch_clock():
+    """Property: the two clocks serve two purposes at once. FPS derives from
+    monotonic spacing and ignores the epoch stamps, while the same calls must
+    produce real epoch-based latency (not monotonic-minus-epoch clamped to 0)."""
     stats = CaptureStats()
     base_mono = time.monotonic() * 1000.0
     now_ms = int(time.time() * 1000)
@@ -99,13 +113,55 @@ def test_fps_still_uses_monotonic_clock():
     for i in range(5):
         stats.record_applied(make_packet(t=now_ms - 500), base_mono + i * 10.0, float(now_ms))
     assert stats.applied_fps == pytest.approx(100.0, rel=0.01)
+    # Latency on the same samples comes from the epoch difference (~500 ms),
+    # proving the monotonic FPS clock never leaks into the latency measurement.
+    assert stats.avg_transport_ms == pytest.approx(500.0, abs=10.0)
+    assert stats.max_transport_ms == pytest.approx(500.0, abs=10.0)
+    assert stats.session_max_transport_ms == pytest.approx(500.0, abs=10.0)
 
 
-def test_replay_reports_zero_by_intent():
-    """Replay passes the packet's own stamp as the applied epoch time: zero by intent."""
-    packet = make_packet(t=int(time.time() * 1000))
+def test_replay_zero_comes_from_stamp_not_clamping():
+    """Property: replay latency is exactly zero because the applied epoch stamp
+    equals the send stamp -- not because a mismatched clock clamped to 0.0.
+    The same packet applied LATER must report the real difference."""
+    now_ms = int(time.time() * 1000)
+    packet = make_packet(t=now_ms)
     stats = CaptureStats()
     stats.record_applied(packet, time.monotonic() * 1000.0, float(packet.t))
     assert stats.max_transport_ms == 0.0
     assert stats.avg_transport_ms == 0.0
     assert stats.packets_applied == 1
+
+    # Contrast case: same packet, applied 9 epoch-ms later -> real latency.
+    later = CaptureStats()
+    later.record_applied(packet, time.monotonic() * 1000.0, float(packet.t + 9))
+    assert later.max_transport_ms == pytest.approx(9.0, abs=0.5)
+    assert later.avg_transport_ms == pytest.approx(9.0, abs=0.5)
+    assert later.session_max_transport_ms == pytest.approx(9.0, abs=0.5)
+
+
+def test_session_max_spans_beyond_the_rolling_window():
+    """Property: session_max_transport_ms keeps the maximum over EVERY sample,
+    not just the last STATS_WINDOW, while max_transport_ms keeps rolling."""
+    now_ms = int(time.time() * 1000)
+    stats = CaptureStats()
+    # One 50 ms spike, then a full window of quiet 1 ms samples.
+    stats.record_applied(make_packet(t=now_ms - 50), time.monotonic() * 1000.0, float(now_ms))
+    for i in range(STATS_WINDOW):
+        stats.record_applied(make_packet(t=now_ms - 1), time.monotonic() * 1000.0, float(now_ms))
+    # The window has rolled past the spike...
+    assert stats.max_transport_ms == pytest.approx(1.0, abs=0.5)
+    # ...but the session max still remembers it.
+    assert stats.session_max_transport_ms == pytest.approx(50.0, abs=0.5)
+
+
+def test_session_max_resets_with_the_session():
+    """Property: CaptureStats.reset() clears session_max_transport_ms too."""
+    now_ms = int(time.time() * 1000)
+    stats = CaptureStats()
+    stats.record_applied(make_packet(t=now_ms - 42), time.monotonic() * 1000.0, float(now_ms))
+    assert stats.session_max_transport_ms > 0.0
+    stats.reset()
+    assert stats.session_max_transport_ms == 0.0
+    assert stats.max_transport_ms == 0.0
+    assert stats.avg_transport_ms == 0.0

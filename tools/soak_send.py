@@ -64,6 +64,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--hz", type=float, default=30.0, help="target packet rate")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=11111)
+    parser.add_argument(
+        "--stamp-skew-ms",
+        type=int,
+        default=0,
+        help=(
+            "measurement-integrity control: stamp each packet's t field N ms "
+            "earlier than the real send time (t = now_ms - N) so the receiving "
+            "gate must observe at least N ms of transport latency. This shifts "
+            "timestamps only and leaves the send rate untouched; it is NOT a "
+            "network simulation and injects no real delay."
+        ),
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -90,7 +102,9 @@ def main(argv: list[str] | None = None) -> int:
             if now < next_send:
                 time.sleep(max(0.0, next_send - now))
             next_send += target_interval
-            t_ms = int(time.time() * 1000)
+            # --stamp-skew-ms shifts the wire timestamp only (measurement
+            # integrity control), never the send schedule.
+            t_ms = int(time.time() * 1000) - args.stamp_skew_ms
             try:
                 sock.sendto(synthetic_packet(t_ms, elapsed), (args.host, args.port))
                 sent += 1

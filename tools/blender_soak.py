@@ -1,6 +1,10 @@
 """Headless 30-minute soak test: real UDP transport + consumer + Rig Connector.
 
-Run with:  blender -b --python tools/blender_soak.py -- <minutes> <port>
+Run with:  blender -b --python tools/blender_soak.py -- <minutes> <port> [expected_floor_ms]
+
+The optional third argument is the expected latency floor in ms for the
+positive control: pair it with soak_send.py's --stamp-skew-ms so the gate can
+prove the latency measurement actually responded to the injected skew.
 
 Builds the synthetic rig, runs the full wizard (scan + bind), starts the
 consumer against the given UDP port, then pumps the consumer tick manually at
@@ -22,6 +26,7 @@ sys.path.insert(0, REPO_ROOT)
 argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else ["30", "11111"]
 SOAK_MINUTES = float(argv[0])
 PORT = int(argv[1])
+EXPECTED_FLOOR_MS = float(argv[2]) if len(argv) > 2 else None
 
 
 def main() -> int:
@@ -112,27 +117,24 @@ def main() -> int:
         "applied_fps": stats.applied_fps,
         "transport_avg_ms": stats.avg_transport_ms,
         "transport_max_ms": stats.max_transport_ms,
+        "session_max_transport_ms": stats.session_max_transport_ms,
         "invalid_packets": stats.invalid_packets,
         "tick_p95_ms": p95 * 1000.0,
         "session_lines": session_lines,
         "rc_shape_jawOpen": controller.get("rc_shape_jawOpen"),
         "engine": stats.engine,
     }
+    if EXPECTED_FLOOR_MS is not None:
+        report["expected_latency_floor_ms"] = EXPECTED_FLOOR_MS
     report_path = os.path.join(out_dir, "soak_report.json")
     with open(report_path, "w", encoding="utf-8") as fh:
         json.dump(report, fh, indent=2)
     print("=== SOAK REPORT ===", flush=True)
     print(json.dumps(report, indent=2), flush=True)
 
-    failures = []
-    if applied < SOAK_MINUTES * 60 * 25:  # < 25 fps average
-        failures.append(f"applied {applied} packets is below 25 fps average")
-    if stats.max_transport_ms > 100:
-        failures.append(f"transport max {stats.max_transport_ms:.1f} ms > 100 ms")
-    if stats.invalid_packets > 0:
-        failures.append(f"{stats.invalid_packets} invalid packets")
-    if session_lines < applied * 0.9:
-        failures.append("session recording lost packets")
+    from tools.soak_gates import evaluate_soak_gates  # noqa: PLC0415
+
+    failures = evaluate_soak_gates(report)
     if failures:
         for failure in failures:
             print(f"SOAK GATE FAILED: {failure}", flush=True)

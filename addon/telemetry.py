@@ -31,6 +31,7 @@ class CaptureStats:
     applied_fps: float = 0.0
     avg_transport_ms: float = 0.0
     max_transport_ms: float = 0.0
+    session_max_transport_ms: float = 0.0  # max over EVERY sample, not just the window
     engine: str = ""
     _latency_window: deque = field(default_factory=lambda: deque(maxlen=STATS_WINDOW), repr=False)
     _applied_times: deque = field(default_factory=lambda: deque(maxlen=STATS_WINDOW), repr=False)
@@ -51,6 +52,8 @@ class CaptureStats:
         if applied_epoch_ms is None:
             applied_epoch_ms = time.time() * 1000.0
         transport_ms = max(0.0, applied_epoch_ms - packet.t)
+        if transport_ms > self.session_max_transport_ms:
+            self.session_max_transport_ms = transport_ms
 
         self.packets_applied += 1
         self.engine = packet.engine
@@ -80,6 +83,7 @@ class CaptureStats:
         self.applied_fps = 0.0
         self.avg_transport_ms = 0.0
         self.max_transport_ms = 0.0
+        self.session_max_transport_ms = 0.0
         self.engine = ""
         self._latency_window.clear()
         self._applied_times.clear()
