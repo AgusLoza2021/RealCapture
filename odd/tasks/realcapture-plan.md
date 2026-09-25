@@ -15,6 +15,7 @@ Research the real-time facial capture landscape and produce the planning documen
 - [x] Write docs/roadmap.md (milestones M0–M5)
 - [x] Locked decisions: both backends (MediaPipe default + OpenSeeFace alt), Blender 4.2 LTS, Windows-first
 - [x] Git repository initialized, M0 committed — commit cefe2a0 (docs: add TDD v0.1, roadmap (M0-M5), and capture-landscape research)
+- [ ] Public README stub (positioning + IP note, no methodology) — the last open M0 item; no root `README.md` exists yet
 - [ ] Review workload check: split docs into reviewable work-unit commits
 
 ## Constraints
@@ -23,4 +24,5 @@ Research the real-time facial capture landscape and produce the planning documen
 - Path: local-first quality, then open-source release.
 
 ## Evidence
-- (none yet — planning phase)
+- Planning phase: `docs/research/`, `docs/realcapture-tdd.md`, `docs/roadmap.md`.
+- 2026-09-25: `docs/roadmap.md` reconciled against verified evidence — the git/M0-commit item checked against `cefe2a0`, M1's six items checked with verified commit references (`eff08f4`, `0f9dd87`, `2cc9d57`, `f59567d`), and M1 set to `In progress` rather than `Done` because its latency exit criterion is not met. See `odd/tasks/milestone-closure-m0-m1.md`.

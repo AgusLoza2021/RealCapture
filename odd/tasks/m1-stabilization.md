@@ -34,3 +34,11 @@ record/replay, and a clean 30-minute soak.
 - A eff08f4, B 2cc9d57, C 0f9dd87, D f59567d, F 45ebb74 (see task rows)
 - E: soak evidence in soak_output/ (headless GUI-equivalent run; live-camera GUI soak optional pre-release); gates passed (>=25 fps avg,
   transport max < 100 ms, 0 invalid, session complete)
+
+> **Correction 2026-09-25.** The "transport max < 100 ms" gate in the row above was
+> **vacuous**: `addon/telemetry.py` compared the sender's epoch-ms stamp against the
+> receiver's monotonic clock, so `max(0.0, ...)` clamped every sample to exactly `0.0`, and
+> the gate at `tools/blender_soak.py:130` tested that constant. The soak result was real;
+> its latency claim was not evidence of anything. Fixed the same day — see
+> `odd/tasks/milestone-closure-m0-m1.md`. Re-measured over real UDP: avg 9.1 ms / max
+> 18.0 ms (transport + consumer apply only).

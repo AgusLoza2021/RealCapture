@@ -12,21 +12,40 @@ Rules: one milestone active at a time; no milestone starts before the previous o
 - [x] Research pass 2 (capture-engine repos + license audit)
 - [x] TDD v0.1
 - [ ] Roadmap reviewed by author
-- [ ] Git repository initialized, M0 committed
+- [x] Git repository initialized, M0 committed — `cefe2a0`
 - [ ] Public README stub (positioning + IP note, no methodology)
 
 **Exit criteria:** docs reviewed; repo has M0 commit.
 
-## M1 — Stabilization Harness — `Open`
+> **Rule conflict surfaced 2026-09-25 (recorded, not hidden).** M1's implementation is
+> complete while M0 is still open, which violates "no milestone starts before the previous
+> one's exit criteria are met". M0's two open items are one owner action (`Roadmap reviewed
+> by author`) and one small artifact (`Public README stub`, which does not exist yet).
+> Closing those two restores the rule instead of weakening it.
+
+## M1 — Stabilization Harness — `In progress`
 Goal: trustworthy plumbing before feature work.
-- [ ] Capture backend runner as external process (both engines), own venv
-- [ ] UDP/JSON transport, latest-frame-wins receiver in `bpy.app.timers` (30–60 Hz)
-- [ ] Per-stage latency telemetry (overlay/panel) + session log
-- [ ] Epsilon gating + property write path (controller object + native drivers)
-- [ ] Session record/replay of packet streams
-- [ ] Stability soak test: 30+ min live session, no degradation, no crash
+- [x] Capture backend runner as external process (both engines), own venv — `eff08f4`, `0f9dd87`
+- [x] UDP/JSON transport, latest-frame-wins receiver in `bpy.app.timers` (30–60 Hz) — `2cc9d57`
+- [x] Per-stage latency telemetry (overlay/panel) + session log — `2cc9d57`, `f59567d`
+- [x] Epsilon gating + property write path (controller object + native drivers) — `2cc9d57`
+- [x] Session record/replay of packet streams — `f59567d`
+- [x] Stability soak test: 30+ min live session, no degradation, no crash — 53,415 applied @ 29.98 fps, 0 invalid, 0 failures (`odd/tasks/m1-stabilization.md`)
 
 **Exit criteria:** end-to-end latency measured ≤ 60 ms on reference scene; 30-min soak clean; telemetry visible.
+
+> **Latency criterion — measurable as of 2026-09-25, not yet met.** The telemetry meant to
+> evidence it was broken: `addon/telemetry.py` compared the sender's epoch-ms stamp against
+> the receiver's monotonic clock, so `max(0.0, ...)` clamped every sample to exactly `0.0`.
+> The panel always read `0.0 ms / 0.0 ms`, and the soak gate `tools/blender_soak.py:130`
+> (`max_transport_ms > 100`) could not fail — the recorded "transport max < 100 ms" claim was
+> validated against that constant. Fixed the same day (epoch on both sides); re-measured over
+> real UDP: **avg 9.1 ms / max 18.0 ms**, 5,400 packets, 0 invalid. That figure covers
+> transport + consumer apply only: the `t` stamp is taken *after* engine inference, so camera
+> capture and inference are excluded from this metric by construction. The "reference scene"
+> number this criterion names therefore still has no measurement point; choosing one (a stamp
+> at frame grab, or an external end-to-end observer) is an open owner decision.
+> Details and follow-ups: `odd/tasks/milestone-closure-m0-m1.md`.
 
 ## M2 — Expression Fidelity — `Open`
 Goal: capture that looks right, not just moves.
