@@ -1,9 +1,13 @@
 """Capture statistics for telemetry (pure logic, no bpy).
 
-Transport latency is measured as ``applied_monotonic_ms - packet.t`` where
-``packet.t`` is the backend's epoch-ms send timestamp. Both clocks are on the
-same machine, so skew is negligible for localhost capture; values are clamped
-to >= 0 anyway.
+Two clocks, two purposes:
+- FPS is a rate: it stays on the monotonic clock (``_applied_times``).
+- Transport latency is a difference against a sender-supplied wall-clock
+  stamp: ``packet.t`` is epoch ms, so it must be subtracted from the applied
+  time on the SAME epoch clock (``time.time()``). Comparing epoch ms against
+  monotonic ms always goes negative and clamps to exactly 0.0.
+Replay passes the packet's own stamp as the applied epoch time so replayed
+packets report zero latency by intent, not because of a clock mismatch.
 """
 
 from __future__ import annotations
@@ -31,10 +35,22 @@ class CaptureStats:
     _latency_window: deque = field(default_factory=lambda: deque(maxlen=STATS_WINDOW), repr=False)
     _applied_times: deque = field(default_factory=lambda: deque(maxlen=STATS_WINDOW), repr=False)
 
-    def record_applied(self, packet: Packet, applied_monotonic_ms: float | None = None) -> None:
+    def record_applied(
+        self,
+        packet: Packet,
+        applied_monotonic_ms: float | None = None,
+        applied_epoch_ms: float | None = None,
+    ) -> None:
+        """Record one applied packet.
+
+        ``applied_monotonic_ms`` feeds FPS (a rate). ``applied_epoch_ms`` must
+        be on the same epoch clock as ``packet.t`` and feeds transport latency.
+        """
         if applied_monotonic_ms is None:
             applied_monotonic_ms = time.monotonic() * 1000.0
-        transport_ms = max(0.0, applied_monotonic_ms - packet.t)
+        if applied_epoch_ms is None:
+            applied_epoch_ms = time.time() * 1000.0
+        transport_ms = max(0.0, applied_epoch_ms - packet.t)
 
         self.packets_applied += 1
         self.engine = packet.engine

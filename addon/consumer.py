@@ -142,11 +142,12 @@ class CaptureConsumer:
             self.face_points.apply(packet)
 
         if self._replay is not None:
-            # Replayed packets carry the original send time; transport latency
-            # is not meaningful in replay, so report zero.
-            self.stats.record_applied(packet, float(packet.t))
+            # Replayed packets carry the original send time; latency against
+            # the packet's own epoch stamp is zero BY INTENT (replay latency
+            # is not meaningful), not because of a clock mismatch.
+            self.stats.record_applied(packet, now_ms, float(packet.t))
         else:
-            self.stats.record_applied(packet, now_ms)
+            self.stats.record_applied(packet, now_ms, time.time() * 1000.0)
 
     def _set_value(self, obj: bpy.types.Object, prop: str, value: float, bypass_epsilon: bool = False) -> bool:
         last = self._last_values.get(prop)
