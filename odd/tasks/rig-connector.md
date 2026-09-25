@@ -11,9 +11,13 @@ Branch: rig-connector (off m1-stabilization-harness)
 
 ## Work units
 
-- [ ] 1. Pure core: canonical channel set (ARKit-52), name standardization
+- [x] 1. Pure core: canonical channel set (ARKit-52), name standardization
       (side/prefix/suffix/separator handling), alias lists (authored),
       versioned RigProfile JSON schema, auto-match engine with confidence.
+      Evidence: commit 3fe637e — addon/rigprofile/ (naming, channels, aliases,
+      profile, matcher) + 58 tests; 101/101 passing; demo: mixed catalog
+      (Jaw_Open, Eye_Blink_*, Brow_Up_L/R, Mouth_Smile_*, vrc.v_aa) matches
+      12/13 controls, one-to-one enforced.
 - [ ] 2. Blender binding layer: create FPD empties (parented to head), bind
       shape keys via drivers, bind bones via constraints, one-shot Unbind.
       bpy glue only in addon modules.
