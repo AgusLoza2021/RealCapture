@@ -32,6 +32,17 @@ class RealCaptureSettings(bpy.types.PropertyGroup):
         type=bpy.types.Object,
         poll=lambda self, obj: obj.type == "EMPTY",
     )
+    record_session: bpy.props.BoolProperty(  # noqa: F841
+        name="Record Session",
+        description="Record incoming packets to session_path while capturing",
+        default=False,
+    )
+    session_path: bpy.props.StringProperty(  # noqa: F841
+        name="Session File",
+        description="JSONL file for session recording (and the file replayed by Replay)",
+        subtype="FILE_PATH",
+        default="//realcapture_session.jsonl",
+    )
 
 
 def register() -> None:
