@@ -13,9 +13,9 @@ record/replay, and a clean 30-minute soak.
 - Epsilon gating; controller-object custom properties + native drivers
 
 ## Tasks
-- [ ] A. Backend core: packet schema module, backend interface, MediaPipe backend (LIVE_STREAM, blendshapes + head pose), run_capture CLI, unit tests for packets — *delegated*
-- [ ] B. Blender addon: receiver (pure logic + thin bpy glue), consumer timer loop, telemetry overlay/panel, scene properties — *delegated*
-- [ ] C. OpenSeeFace adapter: spawn facetracker.py, parse its UDP protocol into RealCapture schema — *delegated, after A+B*
+- [x] A. Backend core: packet schema module, backend interface, MediaPipe backend (LIVE_STREAM, blendshapes + head pose), run_capture CLI, unit tests for packets — commit eff08f4 (delegation runtime unusable: worktree registration cached pre-git-init; executed inline per declared fallback)
+- [x] B. Blender addon: receiver (pure logic + thin bpy glue), consumer timer loop, telemetry panel, scene properties — commit 2cc9d57 (inline fallback, same as A)
+- [x] C. OpenSeeFace adapter: spawn facetracker.py, parse its UDP protocol into RealCapture schema — commit 0f9dd87 (inline fallback, same as A)
 - [ ] D. Session record/replay: capture packet streams to file, replay into addon
 - [ ] E. Soak test: 30+ min live session on reference scene, telemetry screenshot + log as evidence
 - [ ] F. Docs: backend README quickstart, addon install/test instructions
