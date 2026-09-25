@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "kind": "realcapture-rig-profile",
+  "name": "Rigify-style face rig (example)",
+  "head_bone": "head",
+  "rig_kind": "rigify",
+  "points": [
+    { "role": "jaw", "channel": "jawOpen", "kind": "location", "axis": "Z", "gain": -0.05 },
+    { "role": "eye_lid.L", "channel": "eyeBlinkLeft", "kind": "location", "axis": "Z", "gain": -0.012 },
+    { "role": "eye_lid.R", "channel": "eyeBlinkRight", "kind": "location", "axis": "Z", "gain": -0.012 },
+    { "role": "brow.L", "channel": "browOuterUpLeft", "kind": "location", "axis": "Z", "gain": 0.02 },
+    { "role": "brow.R", "channel": "browOuterUpRight", "kind": "location", "axis": "Z", "gain": 0.02 },
+    { "role": "mouth_corner.L", "channel": "mouthSmileLeft", "kind": "location", "axis": "Z", "gain": 0.012 },
+    { "role": "mouth_corner.R", "channel": "mouthSmileRight", "kind": "location", "axis": "Z", "gain": 0.012 }
+  ],
+  "shapekey_bindings": [
+    { "channel": "jawOpen", "target": "jawOpen", "gain": 1.0 },
+    { "channel": "eyeBlinkLeft", "target": "eyeBlinkLeft", "gain": 1.0 },
+    { "channel": "eyeBlinkRight", "target": "eyeBlinkRight", "gain": 1.0 }
+  ],
+  "bone_bindings": [
+    { "point": "jaw", "target": "jaw", "constraint": "copy_location" },
+    { "point": "eye_lid.L", "target": "eyelid.T.L", "constraint": "copy_location" },
+    { "point": "eye_lid.R", "target": "eyelid.T.R", "constraint": "copy_location" },
+    { "point": "brow.L", "target": "brow.B.L", "constraint": "copy_location" },
+    { "point": "brow.R", "target": "brow.B.R", "constraint": "copy_location" },
+    { "point": "mouth_corner.L", "target": "mouth_corner.T.L", "constraint": "copy_location" },
+    { "point": "mouth_corner.R", "target": "mouth_corner.T.R", "constraint": "copy_location" }
+  ]
+}
