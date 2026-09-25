@@ -48,4 +48,38 @@ it reports packets sent, elapsed time, average fps, and send errors.
 | Engine | Status | Notes |
 |---|---|---|
 | MediaPipe Face Landmarker | Implemented | 52 ARKit-shaped blendshapes + head pose, LIVE_STREAM mode, latest-frame-wins |
-| OpenSeeFace | Planned (work unit C) | Adapter for emilianavt/OpenSeeFace (BSD-2-Clause) |
+| OpenSeeFace | Implemented | Adapter for emilianavt/OpenSeeFace (BSD-2-Clause), not bundled |
+
+## OpenSeeFace engine
+
+OpenSeeFace is not bundled (license policy) — download it from the upstream
+repository (emilianavt/OpenSeeFace) and point `--osf-command` at its tracker:
+
+```bash
+# Windows binary release:
+python run_capture.py --engine openseeface --osf-command "C:/OSF/Binary/facetracker.exe"
+
+# Or via Python:
+python run_capture.py --engine openseeface --osf-command "python C:/OSF/facetracker.py"
+```
+
+The backend spawns the tracker (silenced), listens on the tracker's target
+port (`--osf-port`, default 11573), and relays its binary stream as standard
+RealCapture packets. OpenSeeFace channels are forwarded under their native
+names (`mouth_open`, `eyebrow_updown_l`, ...) plus `eyeOpennessLeft/Right`;
+head pose uses OSF conventions (euler degrees, camera-space translation).
+Converting native channels to a rig profile is the mapping layer's job, not
+the transport's.
+
+## Soak testing (no camera needed)
+
+`tools/soak_send.py` streams deterministic synthetic packets for long-running
+stability sessions:
+
+```bash
+python tools/soak_send.py --minutes 30 --hz 30 --port 11111
+```
+
+Enable the addon, press Start (optionally with Record Session on), let it run,
+then check: applied FPS stability, transport latency, Blender responsiveness,
+and memory over time. A session file from a soak run is the M1 exit evidence.
