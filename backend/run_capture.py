@@ -21,7 +21,13 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from backend.backends import BackendImportError, CaptureBackend, MediaPipeBackend, OpenSeeFaceBackend  # noqa: E402
+from backend.backends import (  # noqa: E402
+    BackendImportError,
+    CaptureBackend,
+    MediaPipeBackend,
+    OpenSeeFaceBackend,
+)
+from backend.backends.openseeface_backend import DEFAULT_OSF_PORT  # noqa: E402
 
 logger = logging.getLogger("realcapture")
 
@@ -34,6 +40,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--host", default="127.0.0.1", help="UDP host to send to")
     parser.add_argument("--port", type=int, default=11111, help="UDP port to send to")
     parser.add_argument("--visualize", action="store_true", help="show a live preview window")
+    parser.add_argument(
+        "--osf-command",
+        default="",
+        help=(
+            "openseeface only: tracker command, e.g. 'C:/OSF/Binary/facetracker.exe' "
+            "or a quoted 'python C:/OSF/facetracker.py'"
+        ),
+    )
+    parser.add_argument(
+        "--osf-port",
+        type=int,
+        default=DEFAULT_OSF_PORT,
+        help="openseeface only: local port the tracker streams to (backend listens here)",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     return parser.parse_args(argv)
 
@@ -47,7 +67,7 @@ def build_backend(args: argparse.Namespace) -> CaptureBackend:
     )
     if args.engine == "mediapipe":
         return MediaPipeBackend(**kwargs)
-    return OpenSeeFaceBackend(**kwargs)
+    return OpenSeeFaceBackend(**kwargs, osf_command=args.osf_command, osf_port=args.osf_port)
 
 
 def main(argv: list[str] | None = None) -> int:
