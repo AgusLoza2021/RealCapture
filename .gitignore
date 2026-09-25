@@ -6,3 +6,6 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+soak_output/
+soak_output.log
+realcapture_rig_profile.json
