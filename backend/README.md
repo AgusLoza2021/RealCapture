@@ -24,7 +24,26 @@ python run_capture.py --engine mediapipe --camera 0 --fps 30 --port 11111
 ```
 
 The process prints a startup line, then streams packets until Ctrl+C. On exit
-it reports packets sent, elapsed time, average fps, and send errors.
+it reports packets sent, elapsed time, average fps, and send errors. Add
+`--dashboard 8765` to open the browser companion (below).
+
+## Companion dashboard (browser)
+
+```bash
+python run_capture.py --engine mediapipe --camera 0 --dashboard 8765
+```
+
+With `--dashboard PORT` the process serves a live web dashboard while it
+streams packets to Blender:
+
+- `http://localhost:8765` on this machine, or `http://<pc-ip>:8765` from any
+device on the same Wi-Fi (the printed URL) — a phone works fine for demos.
+- `GET /api/status` returns the same JSON the page consumes.
+- `POST /api/record {"active": true}` toggles a JSONL session recording.
+- `POST /api/capture/stop` asks the capture loop to stop.
+
+The page shows send rate, packet/ error counters, send time, and the most
+active channels. It needs no build step and no internet access.
 
 ## Packet format (UDP/JSON, one datagram per frame)
 

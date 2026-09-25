@@ -1,2 +1,4 @@
 mediapipe>=0.10.9
 opencv-python>=4.8.0
+fastapi>=0.110
+uvicorn>=0.29

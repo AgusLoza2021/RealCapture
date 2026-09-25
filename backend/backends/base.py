@@ -13,7 +13,9 @@ from __future__ import annotations
 import logging
 import socket
 import threading
+import time
 from abc import ABC, abstractmethod
+from typing import Callable
 
 from ..common.packets import Packet
 
@@ -58,6 +60,10 @@ class CaptureBackend(ABC):
         self._socket: socket.socket | None = None
         self._packets_sent = 0
         self._send_errors = 0
+        # Optional dashboard hooks (see backend/dashboard/hub.py). Called from
+        # the capture thread; must never raise into the capture loop.
+        self.on_packet: Callable[[Packet, float], None] | None = None
+        self.on_send_error: Callable[[], None] | None = None
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -135,6 +141,7 @@ class CaptureBackend(ABC):
             return
         from ..common.packets import encode_packet
 
+        started = time.perf_counter()
         try:
             payload = encode_packet(
                 t=packet.t,
@@ -146,7 +153,18 @@ class CaptureBackend(ABC):
             )
             self._socket.sendto(payload, (self.udp_host, self.udp_port))
             self._packets_sent += 1
+            if self.on_packet is not None:
+                proc_ms = (time.perf_counter() - started) * 1000.0
+                try:
+                    self.on_packet(packet, proc_ms)
+                except Exception:  # noqa: BLE001 - observer must not break capture
+                    logger.exception("on_packet observer failed")
         except OSError as exc:
             self._send_errors += 1
+            if self.on_send_error is not None:
+                try:
+                    self.on_send_error()
+                except Exception:  # noqa: BLE001
+                    logger.exception("on_send_error observer failed")
             if self._send_errors <= 5 or self._send_errors % 500 == 0:
                 logger.warning("UDP send failed (%d so far): %s", self._send_errors, exc)
