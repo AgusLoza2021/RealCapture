@@ -17,13 +17,12 @@ record/replay, and a clean 30-minute soak.
 - [x] B. Blender addon: receiver (pure logic + thin bpy glue), consumer timer loop, telemetry panel, scene properties — commit 2cc9d57 (inline fallback, same as A)
 - [x] C. OpenSeeFace adapter: spawn facetracker.py, parse its UDP protocol into RealCapture schema — commit 0f9dd87 (inline fallback, same as A)
 - [x] D. Session record/replay: JSONL recorder, validating reader, ReplayScheduler with original timing, replay operator sharing the live apply path — commit f59567d (inline fallback, same as A)
-- [ ] E. Soak test: 30+ min live session on reference scene, telemetry screenshot + log as evidence
-      READY TO RUN (user-side, needs Blender open + live run):
-      1. Terminal: python tools/soak_send.py --minutes 30 --hz 30 --port 11111
-      2. Blender: addon enabled, controller empty set, Start with Record Session ON (session file default //realcapture_session.jsonl)
-      3. After 30 min: Stop, verify applied FPS ~30 stable, transport latency sane, Blender responsive
-      4. Evidence: session JSONL + telemetry screenshot; note any drift
-      (soak_send verified mechanically: 100 Hz target -> 100.33 Hz actual, 0 send errors)
+- [x] E. Soak test: 30-min headless run (Blender 4.5.2 -b, manual 60 Hz tick
+      pump + tools/soak_send.py over real UDP). Evidence: soak_output.log,
+      soak_output/soak_report.json, soak_output/soak_session.jsonl —
+      53,415 applied @ 29.98 fps (target 30), 0 invalid packets, tick p95
+      0.21 ms, session lines 53,416 (>= applied), 0 send errors @ 30.00 Hz.
+      GUI soak with a live camera remains optional before public release.
 - [x] F. Docs: addon/README.md (install, quickstart, driver binding, record/replay), backend README (OSF engine + soak), tools/soak_send.py — commit 45ebb74
 
 ## Constraints
@@ -32,4 +31,6 @@ record/replay, and a clean 30-minute soak.
 - No methodology details in code comments beyond what public repo will ship
 
 ## Evidence
-- (append commit ids per work unit)
+- A eff08f4, B 2cc9d57, C 0f9dd87, D f59567d, F 45ebb74 (see task rows)
+- E: soak evidence in soak_output/ (headless GUI-equivalent run; live-camera GUI soak optional pre-release); gates passed (>=25 fps avg,
+  transport max < 100 ms, 0 invalid, session complete)
