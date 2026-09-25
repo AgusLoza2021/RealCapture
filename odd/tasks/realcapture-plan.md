@@ -14,7 +14,7 @@ Research the real-time facial capture landscape and produce the planning documen
 - [x] Write docs/realcapture-tdd.md (public-facing technical design doc, private methodology redacted)
 - [x] Write docs/roadmap.md (milestones M0–M5)
 - [x] Locked decisions: both backends (MediaPipe default + OpenSeeFace alt), Blender 4.2 LTS, Windows-first
-- [ ] Git repository initialized, M0 commit (pending user approval)
+- [x] Git repository initialized, M0 committed — commit cefe2a0 (docs: add TDD v0.1, roadmap (M0-M5), and capture-landscape research)
 - [ ] Review workload check: split docs into reviewable work-unit commits
 
 ## Constraints
