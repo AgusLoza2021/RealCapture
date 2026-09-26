@@ -8,9 +8,15 @@ Requires **Blender 4.2 LTS** or newer.
 
 ## Install
 
-1. Edit > Preferences > Add-ons > Install…
-2. Select this folder (`addon/`) as a ZIP (or install from disk on 4.2+).
-3. Enable **RealCapture**.
+1. Edit > Preferences > Add-ons.
+2. Open the drop-down menu at the top right of the Add-ons section and choose
+   **Install from Disk…**.
+3. Select this repository's `addon/` folder — Blender 4.2+ accepts an add-on
+   folder directly (a ZIP of the folder works the same way).
+4. Enable **RealCapture** in the add-on list.
+
+The addon registers as **RealCapture** (category *Animation*) and declares a
+Blender floor of 4.2.0, so older Blender versions will not list it.
 
 ## Quick start
 

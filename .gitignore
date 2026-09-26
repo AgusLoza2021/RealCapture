@@ -12,3 +12,10 @@ realcapture_rig_profile.json
 
 # Runtime-downloaded inference model (see backend/backends/mediapipe_backend.py)
 backend/models/
+
+# Local agent tooling state and machine-specific launcher config (never publish)
+.agents/
+.claude/
+.codegraph/
+skills-lock.json
+local.cmd

@@ -168,7 +168,7 @@ Implemented exactly as above, plus the minimum bind gate the connector never had
   false-positive. 0.25 m is "clearly broken" territory and catches the 0.8211 m tear. The measured
   number is always recorded and reported even when the gate passes.
 
-Measured on the real character (`C:/Users/Lozita/AppData/Local/Temp/rc_mpfb/tmp/character.blend`),
+Measured on the real character (`<RC_MPFB_ROOT>/tmp/character.blend`, the isolated MPFB2 environment),
 with every shape key at 0 and the baseline taken from a fresh open with no bind at all:
 
 | | before T9 | after T9 |
@@ -219,7 +219,7 @@ as `soak_output/mpfb_face_*_TORN_before_t9.png` (renders are gitignored).
   only, no bind — **a real human face with a clear expression**) and `soak_output/mpfb_face_neutral.png`
   / `mpfb_face_smile.png` (same values through the bind — **torn, at rest**). `soak_output/` is
   gitignored, so these images are local evidence only. The `.blend`
-  (`…/Temp/rc_mpfb/tmp/character.blend`, 18,009,107 bytes) lives outside the repository, as required.
+  (`<RC_MPFB_ROOT>/tmp/character.blend`, 18,009,107 bytes) lives outside the repository, as required.
 - Harness verification by the orchestrator, not taken on report: `tools/blender_mpfb_demo.py` exits
   **0** on the real character and exits **1** under mutation (`--value 0` → `no vertex moved relative
   to Basis on 'jawOpen'`), so its assertion can fail. Guard paths exit 3 (no `.blend`) and 4 (no MPFB).
@@ -244,7 +244,7 @@ Two questions to answer with numbers, not with renders:
 
 Work: `tools/blender_mpfb_live.py` gains a `--sweep` mode (all 52 in ONE Blender session, because one
 process per channel would take half an hour) and a `--pose <name>` render mode. Reference for the
-proven camera/render setup: the scratch script `/tmp/rc_mpfb_render3.py`.
+proven camera/render setup: a scratch render script kept outside the repository.
 
 ### T10 RESULT, 2026-09-26 — 52/52 measured, 5 poses rendered
 

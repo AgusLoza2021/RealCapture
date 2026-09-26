@@ -133,7 +133,7 @@ camera-to-rig.cmd 1          :: camera 1
 
 The launcher starts `backend/run_capture.py --engine mediapipe --camera <n> --fps 30 --port 11111` in
 its own window, waits, then opens Blender on
-`C:/Users/Lozita/AppData/Local/Temp/rc_mpfb/tmp/character.blend` with the isolated MPFB2 config
+`<RC_MPFB_ROOT>/tmp/character.blend` with the isolated MPFB2 config
 exported, and stops the pipeline when the Blender window closes. It waits with `ping`, not `timeout`:
 `timeout` resolves to a non-Windows binary on a PATH that also carries git-bash/MSYS.
 
