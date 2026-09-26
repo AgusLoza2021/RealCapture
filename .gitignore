@@ -19,3 +19,6 @@ backend/models/
 .codegraph/
 skills-lock.json
 local.cmd
+
+# Generated Blender extension staging/build output
+dist

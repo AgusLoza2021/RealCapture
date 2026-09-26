@@ -1,0 +1,14 @@
+# RealCapture Blender extension manifest (source of truth for native packaging).
+# `version` and `name` MUST stay equal to bl_info in addon/__init__.py;
+# tests/test_extension_packaging.py pins that equality.
+schema_version = "1.0.0"
+id = "realcapture"
+name = "RealCapture"
+tagline = "Real-time facial capture consumer for Blender"
+version = "0.1.0"
+type = "add-on"
+maintainer = "RealCapture project"
+license = ["SPDX:GPL-3.0-or-later"]
+blender_version_min = "4.2.0"
+website = "https://github.com/AgusLoza2021/RealCapture"
+tags = ["Animation"]
