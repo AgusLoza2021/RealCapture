@@ -30,7 +30,7 @@ Goal: trustworthy plumbing before feature work.
 - [x] Per-stage latency telemetry (overlay/panel) + session log — `2cc9d57`, `f59567d`
 - [x] Epsilon gating + property write path (controller object + native drivers) — `2cc9d57`
 - [x] Session record/replay of packet streams — `f59567d`
-- [x] Stability soak test: 30+ min live session, no degradation, no crash — 53,415 applied @ 29.98 fps, 0 invalid, 0 failures (`odd/tasks/m1-stabilization.md`)
+- [ ] Stability soak test: 30+ min live session, no degradation, no crash — the original run was clean on its recorded data (53,415 applied @ 29.98 fps, latency max 18.0 ms), but the first re-run under a live gate **failed**: a 37-second stall incident from t=80 s to t=117 s, peak 2.36 s, ~1,025 frames dropped, plus two smaller clusters. Cause **not established** (host contention vs our receive loop) — `odd/tasks/soak-stall-incident-investigation.md`
 
 **Exit criteria:** end-to-end latency measured ≤ 60 ms on reference scene; 30-min soak clean; telemetry visible.
 
@@ -55,6 +55,46 @@ Goal: trustworthy plumbing before feature work.
 > recorded pre-fix report now fails the gate instead of passing it.
 > Details and follow-ups: `odd/tasks/milestone-closure-m0-m1.md`,
 > `odd/tasks/m1-latency-gate-hardening.md`.
+>
+> **First 30-minute run with a live gate — 2026-09-25: the gate failed, which is the point.**
+> `SOAK GATE FAILED: session transport max 2359.8 ms > 100 ms`, exit 1. The old windowed gate
+> would have passed this run — the value it gated on was 17.71 ms — so the hardening paid for
+> itself on its first long run: the session-wide max is 2,359.8 ms, against 47 samples above
+> 50 ms and 24 above 100 ms. The pre-fix 30-minute session, recomputed per packet, is clean
+> (avg 8.77 ms, max 18.00 ms, zero samples above 50 ms, largest gap 338 ms), so this is not
+> normal pipeline behaviour and not an artefact of the clock fix.
+>
+> **Cause not established, and the label matters.** The link is loopback UDP: there is no network
+> path that can carry a 2.4 s delay, so "transport incident" is the wrong word. The packets show
+> two distinct signatures — receiver-side stalls (the Blender thread not polling, consistent with
+> session-recording I/O inside the receive path) and genuine sender silence (host CPU
+> scheduling). The main incident spans t=80.4–117.1 s with 23 samples above 100 ms and a 2,359 ms
+> peak; two further clusters sit at t=168 s (5 samples, 56–94 ms) and t=1,326–1,339 s (9 samples,
+> 51–82 ms, plus one 159 ms). Minutes 2 and 23 apply 740 and 1,743 frames against 1,800
+> elsewhere; 1,137 frames are missing over the run, 1,025 of them inside the main incident.
+> Repro-or-refute plus a record-on/record-off discrimination are the next runs:
+> `odd/tasks/soak-stall-incident-investigation.md`.
+>
+> **This run also exposed a second check that cannot fail.** `CaptureStats.record_invalid()`
+> (`addon/telemetry.py:64`) is never called and `UdpReceiver.invalid_count` is never read by the
+> consumer, so `invalid_packets` is structurally always `0`: the gate at `tools/soak_gates.py:41`
+> can never fire and the UI line at `addon/ui.py:142` can never render. Every "0 invalid" figure
+> in this roadmap's M1 evidence is therefore uninformative, not reassuring.
+>
+> **The stall reproduces in 2 minutes, and this host currently fails the 100 ms bound even then.**
+> An independent 2-minute verification run on an otherwise idle machine hit a ~300 ms in-tick
+> stall at t+90 s (`session_max_transport_ms` 328.6, `session_max_gap_ms` 312.0, 9 stale
+> discards, `SOAK GATE FAILED` on the pre-existing 100 ms check). The failure was not on any new
+> gate. So the 30-minute soak criterion is not merely unmet in one run: this host cannot pass it
+> until the stall itself is addressed or the bound is made host-aware, which is now part of the
+> same M1 measurement-point decision.
+>
+> **Loss is now measurable.** The gate gains `session_max_gap_ms` (stall detector, session-wide,
+> outside the 120-sample window) and `stale_dropped` / `stale_drop_ratio`, and the previously dead
+> `invalid_packets` counter is wired. Verified both ways against preserved evidence: the failed
+> 30-minute run derives a 3,191 ms max gap and now **fails**; the clean pre-fix run derives 338 ms
+> and **passes**. The two new bounds (500 ms, 1 %) are provisional — 312 ms was observed on
+> healthy data — and their calibration is an open task.
 
 ## M2 — Expression Fidelity — `Open`
 Goal: capture that looks right, not just moves.

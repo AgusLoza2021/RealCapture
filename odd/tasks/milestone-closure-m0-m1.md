@@ -106,7 +106,7 @@ packet's own stamp so replay still reports zero deliberately rather than by acci
 | T3 | Fix the clock domain in `addon/telemetry.py` + `addon/consumer.py`; correct the misleading docstring | done 2026-09-25 |
 | T4 | Headless Blender measurement over the real UDP transport; record the labelled segment | done 2026-09-25 |
 | T5 | Record evidence here and set the M1 status honestly | done 2026-09-25 |
-| T6 | (owner decision) re-run the full 30-minute soak for the closure record | not started |
+| T6 | (owner decision) re-run the full 30-minute soak for the closure record | done 2026-09-25 — **failed**: a 37 s stall incident (peak 2,359.8 ms, ~1,025 frames dropped) plus two smaller clusters, `exit 1`. The 30-minute criterion is not re-earned; new doc `odd/tasks/soak-stall-incident-investigation.md` |
 | T7 | Make the soak latency gate non-vacuous: lower bound + a session-wide max instead of the 120-sample window | done — `odd/tasks/m1-latency-gate-hardening.md`, verified: gate exits 1 at avg 158.1 ms / session max 168.3 ms |
 | T8 | Strengthen `tests/test_telemetry.py` so each test is discriminating for the clock-domain fix (see finding 1) | done — the three tests now fail against the pre-fix clock on assertions, not on arity |
 | T9 | (owner decision) choose the measurement point for the camera + inference segment, or reword the M1 criterion | blocked on owner |
@@ -159,10 +159,15 @@ directory is gitignored, as is its 24 MB session counterpart the verifier also p
 `t` is stamped after inference (`backend/backends/mediapipe_backend.py:184`). It is not a
 webcam-to-Blender figure, and it must never be quoted as one.
 
-### T5 — honest status (2026-09-25)
-M1 keeps `In progress`. Two of its three exit criteria now hold on evidence (30-minute soak
-clean; telemetry visible). The latency criterion stays open for a reason the numbers
-themselves expose: the metric cannot see the segment the criterion names.
+### T5 — honest status (2026-09-25, revised after the T6 re-run)
+M1 keeps `In progress`. **Only one of its three exit criteria now holds on evidence** (telemetry
+visible). The 30-minute soak criterion was clean on its first run and was then **failed** by the
+first re-run under a live gate: a 37-second stall incident (peak 2.36 s, ~1,025 frames dropped)
+plus two smaller clusters, cause not established — `odd/tasks/soak-stall-incident-investigation.md`.
+A second check that cannot fail was found in the same run: `invalid_packets` is structurally
+always 0 because `record_invalid()` is never called, so every historical "0 invalid" figure is
+uninformative. The latency criterion stays open for a
+reason the numbers themselves expose: the metric cannot see the segment the criterion names.
 
 ### Findings from independent verification that are NOT yet fixed
 1. **Only 3 of the 6 new tests prove the fix.** Replaying them against a verbatim pre-fix
@@ -184,7 +189,9 @@ themselves expose: the metric cannot see the segment the criterion names.
 ### Explicitly not verified here
 - No visual confirmation of the Blender UI panel render (`addon/ui.py:141`): background mode
   never draws it. The non-zero field values plus the formatting code are the evidence.
-- No full 30-minute run on the fixed code (T6, owner decision).
+- No full 30-minute run on the fixed code under the *windowed* gate (T6, superseded). The
+  re-run was executed 2026-09-25 under the hardened gate and **failed**; see above and
+  `odd/tasks/soak-stall-incident-investigation.md`.
 
 ## Evidence
 

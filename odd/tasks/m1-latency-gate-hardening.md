@@ -70,6 +70,32 @@ every case; two weak tests found by that pass were tightened afterwards so each 
 mutant it names. Pre-existing evidence remains byte-identical
 (`soak_output/soak_report_30min_pre_fix.json` and its 24 MB session file).
 
+## First 30-minute run on the fixed code — 2026-09-25: the gate failed
+
+Run on the hardened gate, after the two short verification runs above:
+
+| Metric | Value |
+|---|---|
+| Exit code | **1** — `SOAK GATE FAILED: session transport max 2359.8 ms > 100 ms` |
+| Wall time | 1,800.04 s |
+| Applied | 52,863 @ 29.37/s (nominal 30/s), 0 invalid |
+| Latency | avg 9.32 ms, **session max 2,359.0 ms**, windowed max at report 17.71 ms |
+| Samples above bounds | >50 ms: 47 · >100 ms: 24 · >1 s: 8 · >2 s: 3 |
+| Incident window | t = 80.4 s → 117.1 s; receive gaps to 3,191 ms, sender stamp gaps to 2,516 ms |
+| Outside it | two further clusters: 5 samples of 56–94 ms at t≈168 s, and 9 samples of 51–82 ms at t=1,326–1,339 s plus one 159 ms. 47 samples above 50 ms in total, 16 of them outside the incident |
+
+**The gate did its job.** The value it used to gate on was 17.71 ms, so this run would have
+passed before the hardening, while a 37-second incident with 2.36 s peak latency, about 1,025
+frames dropped and two further latency clusters went unreported. The pre-fix 30-minute session, recomputed per packet from
+`recv_t - packet.t`, is clean (avg 8.77 ms, max 18.00 ms, zero samples above 50 ms, largest
+receive gap 338 ms) — so the hardening did not manufacture a failure; it revealed one that the
+old metric could not represent.
+
+This is a **new open defect and an owner-visible consequence for M1**: the 30-minute soak exit
+criterion is not re-earned, and the cause is not established (host contention versus session
+recording inside the receive path). Reproduction, a record-on/record-off discrimination, and the
+new gate gaps this run exposed are tracked in `odd/tasks/soak-stall-incident-investigation.md`.
+
 ## Surviving ways a dead measurement could still pass (recorded, not hidden)
 
 1. **Intermittent death** — a measurement that dies only for some samples, leaving one
@@ -80,6 +106,30 @@ mutant it names. Pre-existing evidence remains byte-identical
 3. **The positive control is self-reported** — the floor comes from the same report and only
 exists when the third argument is passed, so default soak runs still have no independent
    oracle for latency. It is a control, not an oracle.
+4. **Drops are invisible, and the invalid counter is dead. — RESOLVED 2026-09-25.** `stale_dropped`
+   is now counted in `UdpReceiver` and reported as `stale_dropped` plus `stale_drop_ratio`, the
+   consumer feeds `invalid_packets` from the receiver's cumulative counter, the UI row can render,
+   and `session_max_gap_ms` gates the stall. The residual limit is recorded in items 7–9 below.
+5. **The rate floor is a whole-run average.** A minute at 12.3 fps passes a 25 fps
+   session-average floor. The new `session_max_gap_ms` gate covers the stall case; the average
+   floor itself is unchanged.
+6. **`tick_p95_ms` is reported but never gated** — a pre-existing hole, untouched by the stall-gate
+   work.
+7. **`invalid_packets` is wired but still cannot fire in practice.** `tools/soak_send.py` never
+   emits malformed JSON, and `poll_latest` validates only the newest datagram, so a corrupt
+   datagram behind a newer valid one is counted as *stale*, never invalid. Every real run reports 0;
+   only unit tests exercise the path.
+8. **The gap gate is blind to a stall on the final applied packet** — with no successor there is no
+   gap sample, so a run that stalls on its last frame reports a clean gap.
+9. **The new bounds are provisional.** The 500 ms gap bound had only ~1.6x headroom over healthy
+   data (312 ms observed on a clean 2-minute verification run), and `stale_drop_ratio` is not
+   run-length-normalized, so the same absolute jitter fails a short run and passes a long one.
+   Calibration is T7 in `odd/tasks/soak-stall-incident-investigation.md`.
+10. **The two session maxima are sampled at different instants inside one tick.** `session_max_gap_ms`
+   is taken at the top of `_apply` (monotonic) while `session_max_transport_ms` is taken after
+   `face_points.apply()` (epoch). On a stalling tick they differ by the apply cost — 328.6 vs
+   312.0 ms in the verification run — so anyone reconciling the report against
+   `soak_session.jsonl` (whose `recv_t` matches the earlier instant) must not read that gap as a bug.
 
 ## Evidence to produce
 
