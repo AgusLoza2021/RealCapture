@@ -35,6 +35,8 @@ REM                   (default: PATH, then the standard install folders,
 REM                   newest version wins)
 REM    RC_CHARACTER   full path to the character .blend
 REM                   (default: %RC_MPFB_ROOT%\tmp\character.blend)
+REM    (there is no variable for the UDP port: it is fixed at 11111 so the
+REM    addon always listens where the pipeline sends)
 REM
 REM  NOTE: with nothing in front of the camera, MediaPipe detects no face and
 REM  the backend sends no packets at all (by design). The Blender window will
@@ -47,6 +49,15 @@ REM --- machine-specific overrides (optional, gitignored) ----------------------
 REM Sourced BEFORE any default below is resolved. If the file is absent,
 REM continue silently: that is the normal case, not a failure.
 if exist "%~dp0local.cmd" call "%~dp0local.cmd"
+
+REM --- the UDP port of the camera pipeline ----------------------------------
+REM Defined HERE on purpose. An undefined %PORT% expands to nothing, so the
+REM backend gets "--port" with no value, dies with "argument --port:
+REM expected one argument", and Blender still opens and never receives a
+REM packet: a broken run that looks like a working one with no face in view.
+REM Fixed on purpose, so it always matches backend/run_capture.py and the
+REM addon's own udp_port setting.
+set "PORT=11111"
 
 REM --- arguments ---------------------------------------------------------------
 set "CAMERA=%~1"
