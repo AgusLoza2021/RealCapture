@@ -224,3 +224,64 @@ as `soak_output/mpfb_face_*_TORN_before_t9.png` (renders are gitignored).
   **0** on the real character and exits **1** under mutation (`--value 0` → `no vertex moved relative
   to Basis on 'jawOpen'`), so its assertion can fail. Guard paths exit 3 (no `.blend`) and 4 (no MPFB).
   178 tests pass.
+
+## T10 — control coverage sweep + expression poses (opened 2026-09-26)
+
+Requested by the owner: "armate diferentes poses, probá blink, smile, angry, a ver si funcionan
+todos los ctrls."
+
+Two questions to answer with numbers, not with renders:
+
+1. **Coverage.** Do ALL 52 channels actually move the mesh on the real MPFB2 character? A render that
+   looks plausible is not evidence; the measurement is max vertex displacement against the rest pose,
+   per channel. Any channel measuring ~0 is investigated individually before being called broken.
+   Known upstream truth to keep separate from this test: `tongueOut` is never emitted by MediaPipe
+   1.0.1 (51/52 exact), and 16 of the 52 channels have no point transform in
+   `addon/rigprofile/defaults.py` — the real character binds shape-keys-only (post-T9), so the
+   question here is whether the SHAPE KEYS cover all 52.
+2. **Expressions.** Renders of named poses (blink, smile, angry, and a couple more) produced through
+   the real bind path, sent to the owner so he can judge them himself.
+
+Work: `tools/blender_mpfb_live.py` gains a `--sweep` mode (all 52 in ONE Blender session, because one
+process per channel would take half an hour) and a `--pose <name>` render mode. Reference for the
+proven camera/render setup: the scratch script `/tmp/rc_mpfb_render3.py`.
+
+### T10 RESULT, 2026-09-26 — 52/52 measured, 5 poses rendered
+
+**Coverage, measured (not rendered).** `tools/blender_mpfb_live.py --sweep` drives every channel in
+`ARKIT_CHANNELS` one at a time in ONE Blender session and records the maximum evaluated-mesh vertex
+displacement against a forced all-zero rest. **52/52 OK, zero DEAD**, exit 0. The parent re-ran it and
+got numbers identical to the worker's run:
+
+| | channel | max disp (m) |
+| --- | --- | --- |
+| strongest | `jawOpen` | 0.038738 |
+| | `mouthClose` | 0.035928 |
+| | `tongueOut` | 0.027467 |
+| | `mouthSmileLeft` | 0.018682 |
+| weakest | `eyeLookUpLeft/Right` | 0.002912 |
+| | `eyeWide/eyeSquint*` | 0.003917–0.003947 |
+
+Two things this settles and one it separates:
+
+- The **shape keys** cover all 52 channels on the real character (the earlier "16 of 52 have no point
+  transform" note is about the *point-transform* table in `addon/rigprofile/defaults.py`; the real
+  character binds shape-keys-only, so that table is not what drives it).
+- `tongueOut` **does** move this mesh (27 mm). Its gap is the **producer**: MediaPipe 1.0.1 never
+  emits it (51/52 exact). A shape-key gap and a producer gap are different defects; do not merge them.
+
+**Expressions.** `--pose blink|wink|smile|angry|surprise|all` renders through the real bind path to
+`soak_output/mpfb_pose_<name>.png` (the existing `mpfb_face_*.png` are never overwritten). The parent
+looked at all five: blink is both eyes shut, wink is one eye shut and it is the correct eye, smile
+lifts the corners and the cheeks, surprise drops the jaw with wide eyes.
+
+**Angry was wrong, and the bug was in the pose definition.** v1 included `browInnerUp: 0.3` — the
+*sadness* cue, the inner-brow-raise "puppy eyes" shape — which fights anger, and the render showed it:
+the face read as mildly annoyed. v2 removes it and adds squint 0.85, sneer 0.85, upper-lip raise 0.6,
+lip press 0.6 and frown 1.0. Honest ceiling: this clay render has **no visible eyebrow hair**, so brow
+motion moves skin that is hard to see; the brow channels measure 6.95 mm, the perception limit is the
+asset, not the control.
+
+**Lesson.** A pose that looks plausible is not evidence that a control works, and a named expression
+can sabotage itself through a channel that means the opposite in FACS. Measure every channel; eyeball
+every render; do not let either one stand in for the other.

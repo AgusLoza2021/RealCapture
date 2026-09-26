@@ -43,6 +43,18 @@ Modes:
       ... blender.exe -b --factory-startup --python tools/blender_mpfb_live.py -- \
           --seconds 10 [--port 11111]
 
+  Headless 52-channel sweep (ONE Blender session; measured per-channel vertex
+  displacement, OK/DEAD verdict per channel; exit 1 if any channel is DEAD):
+
+      ... blender.exe -b --factory-startup --python tools/blender_mpfb_live.py -- \
+          --sweep [--value 1.0]
+
+  Headless named-expression pose renders to soak_output/mpfb_pose_<name>.png
+  (repeatable; --pose all renders every pose):
+
+      ... blender.exe -b --factory-startup --python tools/blender_mpfb_live.py -- \
+          --pose blink --pose smile ...
+
   GUI self-drive (synthetic ramp, no network; useful for a render check):
 
       ... blender.exe --factory-startup --python tools/blender_mpfb_live.py -- --self-drive
@@ -68,6 +80,7 @@ Mutation proof: `--self-test --value 0` must exit 1 with a legible
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import math
 import os
@@ -91,6 +104,65 @@ DEFAULT_PORT = 11111
 DEFAULT_CHANNEL = "jawOpen"
 DEFAULT_VALUE = 0.9
 DEFAULT_SECONDS = 10.0
+
+# -- sweep / pose constants -----------------------------------------------------
+
+# Drive value used by --sweep unless --value is given explicitly.
+SWEEP_DRIVE_VALUE = 1.0
+# Max vertex displacement (metres, evaluated mesh vs rest) at or below which a
+# channel is declared DEAD. 1 mm: an ARKit control that only moves the mesh by
+# less than this does not visibly act on this character.
+SWEEP_DEAD_THRESHOLD = 0.001
+
+# Named expression poses: channel name -> value. Reset to all-zero first.
+POSES: dict[str, dict[str, float]] = {
+    "blink": {
+        "eyeBlinkLeft": 1.0,
+        "eyeBlinkRight": 1.0,
+    },
+    "wink": {
+        "eyeBlinkLeft": 1.0,
+    },
+    "smile": {
+        "mouthSmileLeft": 0.9,
+        "mouthSmileRight": 0.9,
+        "cheekSquintLeft": 0.5,
+        "cheekSquintRight": 0.5,
+        "mouthDimpleLeft": 0.4,
+        "mouthDimpleRight": 0.4,
+    },
+    "angry": {
+        # Anger is brow-down + narrow eyes + a pressed, down-turned mouth.
+        # NOTE: browInnerUp is deliberately ABSENT here. It is the sadness
+        # cue (inner brow raised, the "puppy eyes" shape) and it actively
+        # fights anger: the first version of this pose included it at 0.3 and
+        # the render came out looking merely annoyed.
+        "browDownLeft": 1.0,
+        "browDownRight": 1.0,
+        "eyeSquintLeft": 0.85,
+        "eyeSquintRight": 0.85,
+        "cheekSquintLeft": 0.4,
+        "cheekSquintRight": 0.4,
+        "noseSneerLeft": 0.85,
+        "noseSneerRight": 0.85,
+        "mouthUpperUpLeft": 0.6,
+        "mouthUpperUpRight": 0.6,
+        "mouthPressLeft": 0.6,
+        "mouthPressRight": 0.6,
+        "mouthFrownLeft": 1.0,
+        "mouthFrownRight": 1.0,
+    },
+    "surprise": {
+        "browInnerUp": 1.0,
+        "browOuterUpLeft": 1.0,
+        "browOuterUpRight": 1.0,
+        "eyeWideLeft": 1.0,
+        "eyeWideRight": 1.0,
+        "jawOpen": 0.9,
+    },
+}
+POSE_ORDER = ("blink", "wink", "smile", "angry", "surprise")
+POSE_OUTPUT_DIR = os.path.join(REPO_ROOT, "soak_output")
 
 PUMP_HZ = 30  # manual tick rate for the headless --seconds loop
 
@@ -333,6 +405,189 @@ def mode_self_drive(blend_path: str) -> int:
     return EXIT_OK
 
 
+# -- sweep / pose helpers -------------------------------------------------------
+
+def _reset_all_shape_values(mesh_obj) -> None:
+    """Set EVERY shape key value to 0 and force a depsgraph update.
+
+    Robust on purpose: the value is never trusted from a write alone. After the
+    update the values are read back; a key that refuses to go to 0 is reported
+    (twice) instead of silently leaking into the next measurement.
+    """
+    key_blocks = mesh_obj.data.shape_keys.key_blocks
+    for _attempt in range(2):
+        for key in key_blocks:
+            key.value = 0.0
+        bpy.context.view_layer.update()
+        stuck = [key.name for key in key_blocks if abs(key.value) > 1e-9]
+        if not stuck:
+            return
+        print(f"Warning: shape keys did not reset to 0 after update: {stuck}; "
+              "retrying once")
+    print("MPFB LIVE WARNING: some shape key values are still non-zero after "
+          "reset; subsequent measurements may be contaminated")
+
+
+def _max_vertex_displacement(mesh_obj, rest_coords: list) -> float:
+    """Max |live - rest| over ALL evaluated mesh vertices, in metres."""
+    live = _mpfb._live_coords(mesh_obj)
+    return max((a - b).length for a, b in zip(live, rest_coords))
+
+
+def _setup_render(mesh_obj) -> None:
+    """Camera/lighting/render setup, same framing as /tmp/rc_mpfb_render3.py
+    (the script that produced the proven soak_output/mpfb_face_*.png set):
+    Cycles 64 samples denoised, 900x900, sun key+fill, track-to camera on the
+    geometric head centre. A human can therefore compare pose renders against
+    the existing face renders directly.
+    """
+    import mathutils
+
+    V = mathutils.Vector
+    for name in ("Cube", "Light", "Camera"):
+        obj = bpy.data.objects.get(name)
+        if obj:
+            obj.hide_render = True
+            obj.hide_viewport = True
+
+    wg = [mesh_obj.matrix_world @ v.co for v in mesh_obj.data.vertices]
+    top = max(p.z for p in wg)
+    head_pts = [p for p in wg if p.z > top - 0.30]
+    hc = sum(head_pts, V((0, 0, 0))) / len(head_pts)
+
+    scene = bpy.context.scene
+    scene.render.engine = "CYCLES"
+    scene.cycles.samples = 64
+    scene.cycles.use_denoising = True
+    scene.render.resolution_x = scene.render.resolution_y = 900
+    scene.render.image_settings.file_format = "PNG"
+    scene.world.use_nodes = True
+    scene.world.node_tree.nodes["Background"].inputs[0].default_value = \
+        (0.28, 0.32, 0.38, 1.0)
+    for name, rot, energy in (("SunKey", (1.05, 0.0, 0.45), 5.0),
+                              ("SunFill", (1.35, 0.0, -1.0), 2.2)):
+        light_data = bpy.data.lights.new(name, "SUN")
+        light_data.energy = energy
+        light_obj = bpy.data.objects.new(name, light_data)
+        light_obj.rotation_euler = rot
+        scene.collection.objects.link(light_obj)
+    cam_data = bpy.data.cameras.new("Cam")
+    cam = bpy.data.objects.new("Cam", cam_data)
+    scene.collection.objects.link(cam)
+    scene.camera = cam
+    target = bpy.data.objects.new("Aim", None)
+    scene.collection.objects.link(target)
+    target.location = hc
+    cam.constraints.new("TRACK_TO").target = target
+    cam.location = hc + V((0.06, -0.52, 0.045))
+    cam_data.clip_start = 0.01
+    cam_data.clip_end = 20
+
+
+def mode_sweep(value: float, blend_path: str) -> int:
+    """Drive EVERY ARKit channel to `value` (one packet each, real consumer
+    apply path) and measure the max vertex displacement of the evaluated mesh
+    against the all-zero rest state. One Blender session for all 52 channels.
+    """
+    from addon.rigprofile.channels import ARKIT_CHANNELS
+
+    mesh_obj, consumer = _open_and_bind(blend_path)
+    if consumer.face_points is None:
+        print("MPFB LIVE FAILED: bind produced no FacePointRig; the consumer "
+              "apply path cannot drive this character")
+        return EXIT_ERROR
+
+    key_blocks = mesh_obj.data.shape_keys.key_blocks
+    _reset_all_shape_values(mesh_obj)
+    rest_coords = _mpfb._live_coords(mesh_obj)
+    print(f"SWEEP: driving {len(ARKIT_CHANNELS)} channels to {value:g} each, "
+          f"DEAD threshold {SWEEP_DEAD_THRESHOLD:g} m "
+          f"({len(rest_coords)} mesh vertices per measurement)")
+
+    results: list[tuple[str, float, str, float]] = []  # name, disp, verdict, readback
+    for channel in ARKIT_CHANNELS:
+        if channel not in key_blocks:
+            results.append((channel, 0.0, "DEAD", float("nan")))
+            print(f"Warning: channel '{channel}' has no shape key on "
+                  f"{mesh_obj.name}; measured as DEAD")
+            continue
+        consumer._apply(_live.make_packet({channel: value}))
+        bpy.context.view_layer.update()
+        disp = _max_vertex_displacement(mesh_obj, rest_coords)
+        readback = key_blocks[channel].value
+        verdict = "OK" if disp > SWEEP_DEAD_THRESHOLD else "DEAD"
+        results.append((channel, disp, verdict, readback))
+        _reset_all_shape_values(mesh_obj)
+
+    print(f"\n{'channel':<22} {'max disp (m)':>12}  verdict")
+    for channel, disp, verdict, _readback in results:
+        print(f"{channel:<22} {disp:12.6f}  {verdict}")
+
+    dead = [name for name, _d, verdict, _r in results if verdict == "DEAD"]
+    n_ok = len(results) - len(dead)
+    print(f"\nSWEEP: {n_ok}/{len(results)} channels moved geometry")
+    if dead:
+        for channel in dead:
+            disp = next(d for n, d, v, _r in results if n == channel and v == "DEAD")
+            print(f"DEAD: {channel} (max displacement {disp:.6f} m)")
+        print("MPFB LIVE SWEEP FAILED")
+        return EXIT_ASSERT
+    print("MPFB LIVE SWEEP PASSED")
+    return EXIT_OK
+
+
+def mode_pose(names: list[str], blend_path: str) -> int:
+    """Render named expression poses (reset -> apply via the real consumer
+    path -> render) to soak_output/mpfb_pose_<name>.png. Never touches the
+    existing soak_output/mpfb_face_*.png files (different prefix).
+    """
+    expanded: list[str] = []
+    for name in names:
+        if name == "all":
+            expanded.extend(POSE_ORDER)
+        else:
+            expanded.append(name)
+    unknown = [name for name in expanded if name not in POSES]
+    if unknown:
+        print(f"MPFB LIVE FAILED: unknown pose name(s) {unknown}; "
+              f"known poses: {list(POSE_ORDER)} (or 'all')")
+        return EXIT_ERROR
+
+    mesh_obj, consumer = _open_and_bind(blend_path)
+    if consumer.face_points is None:
+        print("MPFB LIVE FAILED: bind produced no FacePointRig; the consumer "
+              "apply path cannot drive this character")
+        return EXIT_ERROR
+
+    _setup_render(mesh_obj)
+    os.makedirs(POSE_OUTPUT_DIR, exist_ok=True)
+    key_blocks = mesh_obj.data.shape_keys.key_blocks
+    for name in expanded:
+        shapes = POSES[name]
+        _reset_all_shape_values(mesh_obj)
+        consumer._apply(_live.make_packet(shapes))
+        bpy.context.view_layer.update()
+        got = {ch: round(key_blocks[ch].value, 3)
+               for ch in shapes if ch in key_blocks}
+        path = os.path.join(POSE_OUTPUT_DIR, f"mpfb_pose_{name}.png")
+        if os.path.basename(path).startswith("mpfb_face_"):
+            print(f"MPFB LIVE FAILED: refusing to overwrite existing "
+                  f"soak_output/mpfb_face_*.png renders")
+            return EXIT_ERROR
+        bpy.context.scene.render.filepath = path
+        bpy.ops.render.render(write_still=True)
+        if not os.path.isfile(path):
+            print(f"MPFB LIVE FAILED: render did not write {path}")
+            return EXIT_ERROR
+        size = os.path.getsize(path)
+        with open(path, "rb") as handle:
+            digest = hashlib.sha256(handle.read()).hexdigest()
+        print(f"WROTE: {path}  {size} bytes  sha256={digest}")
+        print(f"  pose '{name}' keys read back from the real mesh = {got}")
+    print(f"MPFB LIVE POSE OK: rendered {len(expanded)} pose(s)")
+    return EXIT_OK
+
+
 # -- entry ------------------------------------------------------------------------
 
 def _parse_args() -> dict:
@@ -341,6 +596,7 @@ def _parse_args() -> dict:
     parsed: dict = {
         "mode": "udp", "port": DEFAULT_PORT, "channel": DEFAULT_CHANNEL,
         "value": DEFAULT_VALUE, "seconds": DEFAULT_SECONDS, "blend": None,
+        "poses": [], "value_given": False,
     }
     positional: list[str] = []
     i = 0
@@ -354,6 +610,12 @@ def _parse_args() -> dict:
             i += 1
             parsed["mode"] = "seconds"
             parsed["seconds"] = float(args[i]) if i < len(args) else DEFAULT_SECONDS
+        elif arg == "--sweep":
+            parsed["mode"] = "sweep"
+        elif arg == "--pose":
+            i += 1
+            if i < len(args):
+                parsed["poses"].append(args[i])
         elif arg == "--port":
             i += 1
             parsed["port"] = int(args[i]) if i < len(args) else DEFAULT_PORT
@@ -363,6 +625,7 @@ def _parse_args() -> dict:
         elif arg == "--value":
             i += 1
             parsed["value"] = float(args[i]) if i < len(args) else DEFAULT_VALUE
+            parsed["value_given"] = True
         elif arg == "--blend":
             i += 1
             parsed["blend"] = args[i] if i < len(args) else None
@@ -390,6 +653,11 @@ def main() -> int:
 
     if args["mode"] == "self_test":
         return mode_self_test(args["channel"], args["value"], blend_path)
+    if args["mode"] == "sweep":
+        sweep_value = args["value"] if args["value_given"] else SWEEP_DRIVE_VALUE
+        return mode_sweep(sweep_value, blend_path)
+    if args["poses"]:
+        return mode_pose(args["poses"], blend_path)
     if args["mode"] == "seconds":
         return mode_seconds(args["seconds"], args["port"], blend_path)
     if args["mode"] == "self_drive":
