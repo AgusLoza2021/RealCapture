@@ -1,7 +1,10 @@
 # Feature: Producer vocabulary contract — the missing normalization layer
 
-Status: **open defect, reported 2026-09-25 from a read-only reconnaissance.** No code written.
-Needs one owner decision (T1) and one real capture (T2) before it can be closed.
+Status: **open defect, narrowed 2026-09-25.** T1 (owner decision) still open. The load-bearing
+unknown — the real emitted vocabulary — is now **ANSWERED with a live capture**, and the answer is
+much narrower than feared: **MediaPipe matches 51 of the 52 channels exactly.** What remains
+broken is OpenSeeFace (0 of 16), the removed `BaseOptions` re-export, and the 16 channels with no
+default point transform.
 
 ## The defect in one sentence
 
@@ -47,7 +50,8 @@ them — and that layer does not exist.
 ### 16 ARKit channels have no path at all
 `addon/rigprofile/defaults.py:15-46` defines point transforms for only 36 of the 52 channels once
 side-expanded. These 16 have no default transform, so with a default profile they can only move a
-mesh shape key whose name is exactly the ARKit name and which the wizard happened to include:
+mesh shape key whose name is exactly the ARKit name and which the wizard happened to include.
+15 of them **are** emitted by MediaPipe, so the gap bites point-transform rigs:
 
 ```
 jawForward, mouthClose, mouthDimpleLeft, mouthDimpleRight, mouthLeft,
@@ -55,6 +59,9 @@ mouthPressLeft, mouthPressRight, mouthPucker, mouthRight, mouthRollLower,
 mouthRollUpper, mouthShrugLower, mouthShrugUpper, noseSneerLeft,
 noseSneerRight, tongueOut
 ```
+
+`tongueOut` is the one member of this set that MediaPipe never emits at all, so it is doubly
+unreachable — no transform and no producer.
 
 ### The documented mitigation does not exist
 `docs/realcapture-tdd.md:153` lists the risk "ARKit-52 semantic drift between backends" with the
@@ -71,34 +78,68 @@ still pass if MediaPipe renamed a blendshape to `mouthSmile_L`. `tests/test_pack
 three arbitrary strings as payload. The synthetic Blender smoke test hard-codes its own names
 (`tools/blender_smoke_test.py:59-60`) and can never disagree with `channels.py`.
 
-## What is still unknown, and why it cannot be read off the code
+## The real emitted vocabulary — ANSWERED 2026-09-25 by live capture
 
-**The real MediaPipe `category_name` set is not in the repository.** It is compiled into
-`face_landmarker.task`, which is downloaded at runtime
-(`backend/backends/mediapipe_backend.py:26-30, 84-92`); `backend/models/` does not exist. The
-dependency is an open lower bound (`backend/requirements.txt:1` → `mediapipe>=0.10.9`) and no
-model version or hash is recorded anywhere, so the emitted name set can change with no diff in
-this repository. No sample packet dump, session file, or captured channel list exists either. A
-single in-repo claim that MediaPipe also emits `_neutral` comes from `odd/tasks/free-rig-integration.md`
-and has no evidence artifact behind it.
+Captured on this host from camera 0 through the real backend, with `mediapipe 1.0.1` and the
+model downloaded from the URL recorded at `backend/backends/mediapipe_backend.py:23-27`:
 
-**This is cheap to close, because the addon already exposes the producer vocabulary:**
-`addon/consumer.py:129` writes every incoming shape name verbatim as the custom property
-`rc_shape_<name>`. One real run of the backend with a webcam therefore produces the complete
-emitted name set, with no new instrumented code.
+```
+emitted shape keys: 52
+not in ARKIT_CHANNELS (1):  _neutral
+in ARKIT_CHANNELS, never emitted (1):  tongueOut
+exact matches: 51 of 52
+```
+
+The full emitted set is the 51 ARKit names plus `_neutral`. Two consequences that correct earlier
+assumptions in this repository:
+
+- **The vocabulary risk for MediaPipe is small.** The prose in `backend/README.md:69`,
+  `docs/realcapture-tdd.md:60` and `addon/README.md:31` asserting that the vocabularies match is
+  **substantially correct for MediaPipe**, and an earlier summary in this session that treated the
+  seam as broadly broken overstated it. What is broken is OpenSeeFace and the missing
+  normalization *defence*, not MediaPipe's names.
+- **`_neutral` is real and confirmed** (the claim had previously existed in
+  `odd/tasks/free-rig-integration.md` with no evidence artifact): MediaPipe always emits it as an
+  extra category, so any consumer that treats the emitted set as exactly ARKit-52 sees one extra
+  name. `tongueOut` can never arrive from this engine, so the 16-channel gap below matters only for
+  rigs that need point transforms.
+
+The capture also proves the addon's own exposure route works as predicted:
+`addon/consumer.py:129` writes every incoming shape name verbatim as the `rc_shape_<name>` custom
+property, so a capture needs no new instrumented code.
+
+### Why the capture was blocked for a day, and what it exposed
+
+The risk this document recorded as theoretical — "the emitted name set can change with no diff in
+this repository" — **materialized before the capture could run**. `backend/requirements.txt:1` was
+`mediapipe>=0.10.9`, an open lower bound, so pip installed **1.0.1**, where
+`mediapipe.tasks.python.vision` no longer re-exports `BaseOptions`. The capture loop died
+immediately at the old `backend/backends/mediapipe_backend.py:101`:
+
+```
+AttributeError: module 'mediapipe.tasks.python.vision' has no attribute 'BaseOptions'
+```
+
+Fixed by resolving the symbol **by capability rather than by version** — a pure
+`resolve_base_options(module)` with an ordered candidate list and an actionable error naming the
+version and every location tried — plus an upper bound in `backend/requirements.txt`, plus pure
+stub tests in `tests/test_mediapipe_compat.py` that need mediapipe **not** installed and therefore
+can never be skipped away. This is the concrete cost of the unpinned inference dependency this
+document predicted.
 
 ## Why this matters beyond one rig
 
 It is the same failure shape as the three vacuous metrics already found in this project: a check
-that cannot fail. A wizard scan, a bind, a profile validation, and a soak all report success while
-the character does not move.
+that cannot fail — and, as of 2026-09-25, the same shape as a dependency that can change the
+emitted vocabulary with no diff. A wizard scan, a bind, a profile validation, and a soak all report
+success while the character does not move.
 
 ## Tasks
 
 | id | Task | Depends on |
 |---|---|---|
 | T1 | **Owner decision: build the normalization layer, or declare OpenSeeFace unsupported.** Options: (a) add a producer→channel normalization step at the seam in `addon/binding.py` with per-backend tables and unit tests; (b) drop the OpenSeeFace path and delete its dead code; (c) keep both backends but surface every unmapped name in the telemetry panel and fail the bind when nothing resolved. | none |
-| T2 | **Capture the real MediaPipe vocabulary once** (a short real run; `rc_shape_*` keys from the telemetry panel or a session file) and record it as a checked-in fixture with the observed mediapipe version and model URL. | none |
+| T2 | **Capture the real MediaPipe vocabulary once. DONE 2026-09-25** — 52 emitted, 51 exact ARKit matches, `_neutral` extra, `tongueOut` never emitted. See the capture section above. The fixture still needs to be checked in by T3. | done |
 | T3 | **Pin the contract with a test.** Two independent tests, the second requiring no unknowns and therefore doable first: (i) a pure-pytest test over a stubbed `bpy` calling `addon.binding.FacePointRig.apply` with an exact name and with a near-miss variant, asserting the near-miss does not move; (ii) a fixture-based test asserting `emitted − ARKIT_CHANNELS` equals exactly the known benign extras and `ARKIT_CHANNELS − emitted` is empty. | T2 |
 | T4 | **Add a bind-time minimum.** Report how many channels resolved on bind and fail or warn when zero did, since a zero-match bind currently succeeds and does nothing. | T1 |
 | T5 | **Close the 16-channel gap** in `addon/rigprofile/defaults.py`, or document explicitly that those channels are shape-key-only. | T1 |
@@ -116,4 +157,14 @@ the character does not move.
 - Reconnaissance, 2026-09-25, read-only, no file modified: all `file:line` references above were
   read directly from disk. The OpenSeeFace 0/16 result and the 16-channel gap are derivations from
   those literal strings, not from an executed run — both are verifiable by inspection.
-- Not executed by that reconnaissance (no shell available to it): anything requiring Python.
+- **Live capture, 2026-09-25** (executed, not derived): UDP listener on `127.0.0.1:11111` plus
+  `backend/.venv/Scripts/python.exe backend/run_capture.py --engine mediapipe --camera 0 --fps 30
+  --port 11111`. Result: 430 packets in 20.5 s, 0 send errors, 52 emitted shape keys. The complete
+  name list and the diff against `ARKIT_CHANNELS` are in the capture section above. Negative
+  control: the same listener ran for 15 s with nothing sending and correctly reported 0 packets.
+- **End-to-end, 2026-09-25** (executed): the live camera drove a bound Blender mesh through the
+  real consumer apply path. All 8 bound ARKit channels received non-zero values from camera
+  inference and the mesh deformed. This closes the "does a real producer drive a real rig"
+  question for the shape-key path; it does not prove any third-party rig works.
+- The model artifact itself (`backend/models/face_landmarker.task`) is a downloaded file and is
+  gitignored, not committed.
