@@ -80,20 +80,78 @@ Pure where possible, `bpy` only at the edges, so every unit is testable without 
 
 ## Work units
 
-Not started. Sketch only; this section is expected to change once phase 1 lands.
+Reconciled after phase 1 landed (`850a362`, `a4bc300`). Phase 1 shipped the window, the camera
+endpoints, the Blender back-channel, the truth table and the launchers. Phase 2 starts from the pure
+core outward, because those units are testable without Blender and only R2/R4/R5b/R6 need `bpy`.
 
-- [ ] R1. `TargetAdapter` contract + the shape-key adapter refactored behind it, with the existing
-  52/52 sweep as the regression proof.
-- [ ] R2. Rig import + hierarchy reading into `RigProfile`, role discovery by convention, and an
-  honest "unidentified" list.
+Ordering rule: **nothing touches the proven shape-key path** (52/52, T10) until the pure units around
+it exist, so a live session is never disturbed by a refactor of the bind that works.
+
+- [x] R0. Reuse survey + license read (`docs/research/blender-reuse-landscape.md`, `5824ec0`).
+- [x] R5a. **Weight-zone operations, pure** (`addon/rigprofile/weights.py`): the four ops the field
+  converges on (add, subtract, scale, set) over a named zone, plus per-vertex normalize and an
+  influence limit. Spec frozen below; evidence in "R5a - evidence".
 - [ ] R3. `ChannelMap` as data: derived starting point, user overrides, round-trip serialisation.
-- [ ] R4. Bone adapter behind the gates, with a **refusal** path that fails loudly instead of
-  damaging a mesh.
-- [ ] R5. `WeightZone` ops (pure, unit-tested on synthetic weights) + Blender-side application.
+- [ ] R2. Rig import + hierarchy read into a discovered `RigProfile`, role discovery by convention,
+  honest "unidentified" list. Needs `bpy` and one real external rig (open question 1).
+- [ ] R4. Bone adapter behind the gates, with a refusal path that fails loudly instead of damaging a
+  mesh. Partially reverses T9, so it stays last among the adapter units.
+- [ ] R1. `TargetAdapter` contract + the shape-key adapter refactored behind it, with the 52/52 sweep
+  as the regression proof. Deliberately after R4, so the contract is written against two
+  implementations instead of guessed from one.
+- [ ] R5b. Blender-side application of a zone edit through the adapter (needs R1 + R5a).
 - [ ] R6. The mapping/weight editing surface (table UI, per the field's precedent), wired into the
-  phase-1 window.
-- [ ] R7. Docs: "bring your own rig" walkthrough, plus the **T9 lesson stated as a rule** — a new
-  rig must be validated before it is trusted.
+  phase-1 window (open question 4: browser or Blender panel).
+- [ ] R7. Docs: "bring your own rig" walkthrough, plus the T9 lesson stated as a rule.
+
+### R5a — the frozen contract (parent-owned, not the writer's)
+
+`addon/rigprofile/weights.py`: pure, never imports `bpy`, tested on the system Python.
+
+- `WeightZone(name, vertices)`, frozen dataclass: rejects an empty name, an empty selection, a
+  negative index and a duplicate index.
+- `apply_zone_edit(weights, zone, op, value) -> dict[int, float]`: `op` in `add` | `subtract` |
+  `scale` | `set`, result clamped to `[0, 1]`, vertices inside the zone and absent from `weights`
+  enter at `0.0`, vertices outside the zone are copied through **clamped as well** (a caller cannot
+  smuggle an out-of-range weight past an edit), the input mapping is never
+  mutated, and an unknown op, a non-finite value or a non-finite input weight raises
+  `WeightZoneError` instead of succeeding quietly.
+- `normalize_vertex(weights_by_group) -> dict[str, float]`: one vertex across its groups, sums to
+  `1.0`; an all-zero vertex stays all-zero rather than dividing by zero; an empty mapping returns an
+  empty mapping.
+- `limit_influences(weights_by_group, max_influences=4, *, normalize=False)`: keeps the largest
+  influences with a deterministic tie-break, `max_influences < 1` raises.
+- `changed_vertices(before, after) -> tuple[int, ...]`: honest reporting for the UI, so the edit
+  surface can say what it actually changed instead of asserting success.
+
+The refusal rules are the point of this unit and belong in the tests: an empty selection and an
+unknown operation must fail loudly. This project already paid once for a check that reported success
+over nothing (the vacuous rest gate, and the `all-zero` bind that read as damage-free).
+
+### R5a - evidence
+
+Delivered by a delegated writer, then verified independently by the parent, because a writer's
+"done" is not proof.
+
+- `python -m pytest tests/test_rigprofile_weights.py -q` -> **52 passed**; the canonical suite command
+  is `python -m pytest tests -q` (the hygiene gate collects `tests/` only, so a bare `pytest -q` at
+  the repo root also picks up `tools/blender_smoke_test.py` and dies on `ImportError: bpy`).
+- `python -m pytest tests -q` -> **449 passed, 1 warning** after the README count was corrected
+  (397 -> 449, the README pin is the parent's surface, not the writer's).
+- The module imports only `math`, `dataclasses` and `typing`; `bpy` appears in its docstring prose and
+  is never imported. Checked by reading the actual import lines, not by trusting the report.
+- **Mutation proof (writer)**: the unknown-op refusal replaced by `pass` -> the refusal test fails
+  with `DID NOT RAISE`. **Mutation proof (parent, independent)**: the empty-selection refusal removed
+  -> 2 tests fail (`test_rejects_empty_selection` and `test_from_dict_bypasses_no_rule`), which also
+  proves `from_dict` revalidates through the constructor instead of trusting its input.
+- **Two defects found in parent review and fixed here**: (1) `apply_zone_edit` tested zone membership
+  with `vertex in zone.vertices` inside the loop over every weight, which is O(vertices x zone) on a
+  real mesh (tens of thousands of vertices); it now builds a `set` once. (2) This document said
+  outside-zone vertices "pass through unchanged" while the code clamps them; the code is right (a
+  caller must not smuggle an out-of-range weight past an edit) and the document was corrected.
+- **Not covered yet**: nothing calls this module. R5b (Blender-side application through the adapter)
+  and R6 (the editing surface) are the consumers; until one of them lands, these rules are proven on
+  synthetic mappings only, never against a real mesh.
 
 ## Non-goals
 
