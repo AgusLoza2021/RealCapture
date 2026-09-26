@@ -63,14 +63,14 @@ only part that can be built and tested before the visual design exists.
 - [x] W2. **Frame transport.** JPEG encode at a capped rate (target ≤15 fps, quality tuned for a
   face), served as `multipart/x-mixed-replace` on `/camera.mjpg`, plus a REST `GET /camera.jpg` for
   one-shot. Bounded: when nobody is watching, nothing is encoded.
-- [ ] W3. **Blender back-channel.** The addon answers the sender's address with a small heartbeat
+- [x] W3. **Blender back-channel.** The addon answers the sender's address with a small heartbeat
   carrying its bind report; the backend derives green/yellow/red from heartbeat freshness. Must not
   block the addon's consumer loop, must not break the existing one-way path, and must be honest
   when Blender is simply not open.
-- [ ] W4. **Connection list model (pure logic).** Signals (camera, packets-out, Blender heartbeat,
+- [x] W4. **Connection list model (pure logic).** Signals (camera, packets-out, Blender heartbeat,
   recording) mapped to `{state, reason}`, unit-tested as a truth table. This is the unit that makes
   the lights trustworthy.
-- [ ] W5. **The window itself.** Read the `frontend-design` skill before writing markup; camera panel,
+- [x] W5. **The window itself.** Read the `frontend-design` skill before writing markup; camera panel,
   connection cards, existing telemetry, and a first-run empty state that says what to do next.
 - [ ] W6. **Launch + docs.** A double-clickable path to the window (app mode) and a short doc; the
   existing `camera-to-rig.cmd` flow gains the dashboard flag.
@@ -117,6 +117,169 @@ requirement, and it is the behaviour most likely to regress silently, so it is a
   is exercised through the ASGI app with fake frames. This is the same unproven link as
   `camera-to-rig.cmd`: it needs the owner's face in front of a real camera.
 - The 503 branch for "tap present but no encoder bound" has no dedicated test.
+
+## Frozen contract — decided by the parent, not by the writers
+
+W3, W4 and W5 run as three writers over disjoint file sets. They can only stay disjoint if the
+interface between them is frozen before they start. This section is that interface. Change it here
+first, then change the code.
+
+### Raw facts the backend can know
+
+Interpretation-free values, each owned by whoever produces it:
+
+- `camera_last_frame_age_s: float | None` — seconds since the capture loop last handed over a frame.
+- `packets_out: int`, `packets_last_age_s: float | None` — from the existing hub telemetry.
+- `blender_heartbeat_age_s: float | None` — seconds since the addon last answered. None means never.
+- `blender_bind: dict | None` — the addon's bind report, exactly as the addon sent it.
+- `record_active: bool`.
+
+### What the snapshot carries
+
+`hub.snapshot()` gains one key, also reachable through `/api/status` and the `/ws` snapshot:
+
+```
+"connections": [
+  {"id": "camera",  "label": "Camera",              "state": "green|yellow|red",
+   "reason": "", "detail": {}},
+  {"id": "packets", "label": "Packets to Blender",  ...},
+  {"id": "blender", "label": "Blender rig",         ...}
+]
+```
+
+- `reason` MUST be a non-empty string whenever `state != "green"`. Enforced by construction in one
+  function and tested by mutation: a check that cannot fail is not a check.
+- `detail` is free-form per `id` and may be empty. The UI must never depend on its inner shape to
+  decide a colour.
+- Consumers must treat `connections` as OPTIONAL: an older backend, or a snapshot taken before the
+  model was wired, must render as explicitly unknown, never as green.
+
+### The truth table (W4 owns it, W5 only displays it)
+
+Two thresholds per signal, module constants with names, pinned by tests:
+
+| signal | fresh (green below) | stale (red above) | yellow |
+| --- | --- | --- | --- |
+| camera frame age | 1.0 s | 2.0 s | between the two |
+| packets last arrival | 1.0 s | 2.0 s | between the two |
+| Blender heartbeat age | 2.0 s | 5.0 s | between the two |
+
+- `FRESH_S < STALE_S`, asserted.
+- A signal that is absent or unknown is **red with a reason**, never green. Nothing goes green
+  because nothing told it otherwise.
+- **The light reports the health of the bind IN EFFECT, not of an attempt that was refused.**
+  `bind_profile` measures a point/bone attempt, refuses it when it exceeds the 0.25 m rest gate, tears
+  it down, and only then measures the residual. Reporting the refused attempt's number as the bind's
+  health would paint a perfectly working shape-keys bind yellow forever. A permanent false alarm costs
+  exactly what a false green costs: it teaches the owner to stop reading the light.
+- So: `rest_displacement_m` in the datagram means **the bind in effect** — for `point_bones` the
+  measured attempt, for `shape_keys` after a refusal the residual left by the revert, and null when
+  the bind involves no bone path at all. The refusal evidence travels separately, in
+  `refused_rest_displacement_m`.
+- green: heartbeat fresh, `channels > 0`, and `rest_displacement_m` null or within 0.25 m. An
+  informational reason IS allowed on green, and should be used: "shape keys only; the bone path was
+  refused because it would have moved the mesh 0.83 m at rest".
+- yellow: heartbeat fresh but degraded — `mode == "none"` (Blender is open and nothing is bound), or
+  `rest_displacement_m > 0.25` (a revert that left damage behind). The reason names it.
+- red: heartbeat missing or older than its stale threshold, or an **active** `point_bones` bind
+  measuring above 0.25 m (a torn bind actually in use).
+- A refused bone path with a working fallback is **not** by itself a fault: it is the T9 gate doing
+  its job. It belongs in the reason text, not in the colour.
+
+### The back-channel datagram (W3 owns both ends)
+
+The addon answers the address `recvfrom` already gave it — no new port, no handshake. One JSON
+datagram, one line, best effort:
+
+```
+{"rc_heartbeat": 1, "t_send_ms": <int>, "revision": <int>,
+ "bind": {"mode": "shape_keys|point_bones|none",
+          "channels": <int>,
+          "head_bone": <str|null>,                    <- only while the bone path actually drives
+          "rest_displacement_m": <float|null>,         <- the bind IN EFFECT
+          "refused_rest_displacement_m": <float|null>, <- the rejected point/bone attempt
+          "skip_reason": "no_armature|no_head_bone|rest_gate"|null} | null}
+```
+
+`rest_displacement_m` and `refused_rest_displacement_m` are different numbers and conflating them is
+the defect this section was amended to prevent. On the reference MPFB2 character the refused attempt
+measures about 0.83 m and the revert leaves a residual near zero: the correct report is
+`mode: shape_keys`, `channels: 52`, `rest_displacement_m: <residual>`,
+`refused_rest_displacement_m: 0.83`, `skip_reason: "rest_gate"`, which is a healthy, working rig.
+
+- `rc_heartbeat: 1` is the discriminator: an unrelated datagram must be rejected, not guessed at.
+- Cadence at most ~2 Hz, only while the consumer loop is alive, and it must never block that loop:
+  a bounded best-effort send whose failure is logged once and never raised into the consumer.
+- The datagram stays under 1200 bytes; when the bind report would exceed that, drop detail rather
+  than split the message.
+- The outbound packet format (backend to addon) is frozen and must not change. This datagram is the
+  only new wire traffic, and it travels back on the same socket pair.
+
+### Wiring, owned by the parent
+
+W3 builds the listener and the tracker; W4 builds the model and lets the hub accept a blender
+source; neither owns `run_capture.py` in this round, so the two-line handshake that connects them is
+the parent's integration step, deliberately kept out of both writers' surfaces to avoid a
+cross-dependency between concurrent writers.
+
+## Evidence — W3, W4, W5 delivered
+
+Three writers over disjoint file sets, against the frozen contract above. Reproduced by the parent,
+not taken from the delivery notes.
+
+**W3 — Blender answers back** (`addon/backchannel.py`, `addon/receiver.py`, `addon/consumer.py`,
+`backend/dashboard/heartbeat.py`, `backend/backends/base.py`, `tests/test_backchannel.py`,
+`tests/test_heartbeat.py`). The addon replies to the address `recvfrom` already returned, on the same
+socket: no new port, no handshake, outbound packet format untouched.
+
+- Parent's own end-to-end proof, with a listener socket bound to the sender's own port and a real
+  headless Blender on the reference character: **50 heartbeats received** from `127.0.0.1:11111`,
+  cadence min 0.468 s / avg 0.507 s / max 0.532 s (the ~2 Hz cap holds), 742 packets sent, Blender
+  exited 0 with `MPFB LIVE OK`, `packets=741 fps=29.6`.
+- Payload verbatim: `{"rc_heartbeat":1,"t_send_ms":...,"revision":1,"bind":{"mode":"shape_keys",
+  "channels":52,"head_bone":null,"rest_displacement_m":2.4393007725113045e-07,
+  "refused_rest_displacement_m":0.8318656335786587,"skip_reason":"rest_gate"}}`.
+- **Defect caught and fixed during this phase, by the parent, in the contract itself.** The first
+  delivery reported `rest_displacement_m: 0.8319` — the damage of the point/bone attempt *before* the
+  T9 gate refused it. Taken as the bind's health, that paints a perfectly working shape-keys bind
+  yellow forever, and a permanent false alarm costs exactly what a false green costs. The contract was
+  amended: `rest_displacement_m` is now the bind **in effect** (for the refused path, the residual
+  left by the revert — measured at 2.4e-07 m, i.e. the revert is clean) and the refused attempt
+  travels in `refused_rest_displacement_m`. An anti-conflation test pins it.
+
+**W4 — the lights** (`backend/dashboard/status_model.py`, `backend/dashboard/hub.py`). One pure truth
+table, two thresholds per signal, and a single light constructor that raises rather than letting a
+non-green light carry an empty reason. `hub.snapshot()` keeps every existing key and gains
+`connections`; `/api/status` returns it unchanged (`server.py` needed no edit).
+
+- Verified by the parent against the **real wire payload** above: the working rig is green *with* the
+  refusal line as an informational reason; heartbeat 3 s old is yellow, 9 s old is red, never-heard is
+  red with a reason; `mode: "none"` is yellow ("Blender is open but nothing is bound"); an active
+  `point_bones` bind at 0.83 m is red; a camera frame 1.4 s old is yellow and a missing camera is red.
+- Mutation proof supplied by the writer and re-run by the parent: with the invariant turned into a
+  silent auto-fill, two tests fail; reverted, the suite is green.
+
+**W5 — the window** (`backend/dashboard/static/index.html`, `tests/test_dashboard_ui.py`). One file,
+inline CSS/JS, no framework, no CDN, no external URL (`grep` for `http://|https://` returns nothing).
+Camera panel that only trusts the image while the camera light is green and otherwise covers it with
+the reason text from `connections`; the four-state list (green/yellow/red/unknown) with state printed
+as text as well as colour; a first-run empty state; telemetry and channels preserved; WS with a
+polling fallback.
+
+- `node --check` on the extracted inline script exits 0. **The rendering is unverified**: no browser
+  was opened, so the visual result is reasoned, not observed. This is the honest gap.
+
+**Wiring (parent-owned).** `_tap_camera_age` and `_HeartbeatSource` in `backend/run_capture.py` join
+the tracker to the hub, kept out of both writers' surfaces to avoid a cross-dependency between
+concurrent writers. `_HeartbeatSource` re-reads `backend.heartbeat` instead of snapshotting it,
+because a restart replaces the tracker. `tests/test_run_capture_wiring.py` pins the late binding, and
+the mutation (snapshot the tracker in the constructor) makes exactly that test fail.
+
+Suite: **346 passed, 1 warning**.
+
+**Still unverified at the end of this phase:** the window rendered in a real browser; the whole chain
+with a live camera and a live face in front of it (no camera in the agent environment); the GUI timer
+path in Blender (only the headless pumped-tick path ran).
 
 ## Non-goals
 
