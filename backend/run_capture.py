@@ -14,6 +14,7 @@ import socket
 import sys
 import time
 from pathlib import Path
+from typing import Callable
 
 # Bootstrap: allow running as a script (python backend/run_capture.py) while
 # keeping package-relative imports intact.
@@ -83,6 +84,36 @@ def build_backend(args: argparse.Namespace) -> CaptureBackend:
     return OpenSeeFaceBackend(**kwargs, osf_command=args.osf_command, osf_port=args.osf_port)
 
 
+def _tap_camera_age(tap) -> Callable[[], float | None]:  # noqa: ANN001 - FrameTap
+    """Return a callable giving the age of the newest tapped frame, or None."""
+
+    def camera_age_s() -> float | None:
+        peeked = tap.peek()
+        return None if peeked is None else time.monotonic() - peeked[1]
+
+    return camera_age_s
+
+
+class _HeartbeatSource:
+    """Late-bound view of ``backend.heartbeat`` for the dashboard hub.
+
+    The tracker exists only between start() and stop() and is replaced on
+    every start, so the hub is handed a view that re-reads the attribute
+    rather than a snapshot of it.
+    """
+
+    def __init__(self, backend: CaptureBackend) -> None:
+        self._backend = backend
+
+    def age_s(self, now: float) -> float | None:
+        tracker = getattr(self._backend, "heartbeat", None)
+        return None if tracker is None else tracker.age_s(now)
+
+    def bind_report(self):  # noqa: ANN201 - tracker-owned payload
+        tracker = getattr(self._backend, "heartbeat", None)
+        return None if tracker is None else tracker.bind_report()
+
+
 def _start_dashboard(backend: CaptureBackend, args: argparse.Namespace) -> threading.Thread:
     """Serve the companion dashboard in a daemon thread wired to this backend."""
     import socket as socket_mod
@@ -93,7 +124,6 @@ def _start_dashboard(backend: CaptureBackend, args: argparse.Namespace) -> threa
     from backend.dashboard.hub import BroadcastHub, DashboardHub
     from backend.dashboard.server import DashboardControls, build_jpeg_encoder, create_app
 
-    hub = DashboardHub()
     broadcast = BroadcastHub(on_subscriber_error=lambda exc: logger.warning("dashboard subscriber failed: %s", exc))
 
     # Camera preview feed: the backend publishes raw BGR frames into the tap,
@@ -105,6 +135,11 @@ def _start_dashboard(backend: CaptureBackend, args: argparse.Namespace) -> threa
         frame_tap.publish(frame, frame_t)
 
     backend.on_frame = on_frame
+
+    # The status lights need each source's staleness; without the camera age
+    # and the Blender heartbeat they can only report "unknown", which must
+    # never be rendered as green.
+    hub = DashboardHub(camera_age_s=_tap_camera_age(frame_tap), blender_source=_HeartbeatSource(backend))
 
     def on_packet(packet, proc_ms: float) -> None:  # noqa: ANN001 - schema.Packet
         hub.record_sent(
