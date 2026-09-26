@@ -91,7 +91,16 @@ it exist, so a live session is never disturbed by a refactor of the bind that wo
 - [x] R5a. **Weight-zone operations, pure** (`addon/rigprofile/weights.py`): the four ops the field
   converges on (add, subtract, scale, set) over a named zone, plus per-vertex normalize and an
   influence limit. Spec frozen below; evidence in "R5a - evidence".
-- [ ] R3. `ChannelMap` as data: derived starting point, user overrides, round-trip serialisation.
+- [x] R3. `ChannelMap` as data — **dropped as a phantom unit**; see "R3 - dropped" below. The profile
+  already is the channel map.
+- [ ] R8. **Report unresolved bindings instead of silently dropping them**: `addon/binding.py:405-412`
+  (missing shape key) and `:439` (missing pose bone) `continue` past a binding that does not resolve,
+  and the user-facing report (`addon/wizard.py:130-155`) never mentions it. A hand-edited override
+  that does not resolve disappears with no message at all: the same defect family as a false green,
+  and the only in-Blender override today is exactly that hand edit. **Touches the live path, so it
+  waits until no live session is running.**
+- [ ] R9. Remove or actually use `context.scene["realcapture_bound_profile"]` (`addon/wizard.py:238`):
+  it is written and never read anywhere in the repo, so it is dead state that reads like a feature.
 - [ ] R2. Rig import + hierarchy read into a discovered `RigProfile`, role discovery by convention,
   honest "unidentified" list. Needs `bpy` and one real external rig (open question 1).
 - [ ] R4. Bone adapter behind the gates, with a refusal path that fails loudly instead of damaging a
@@ -127,6 +136,46 @@ it exist, so a live session is never disturbed by a refactor of the bind that wo
 The refusal rules are the point of this unit and belong in the tests: an empty selection and an
 unknown operation must fail loudly. This project already paid once for a check that reported success
 over nothing (the vacuous rest gate, and the `all-zero` bind that read as damage-free).
+
+### R3 - dropped (parent decision, with evidence)
+
+A read-only recon asked whether R3 would duplicate something that already exists. It would.
+`RigProfile` (`addon/rigprofile/profile.py:110-118`) already stores all three mappings — channel to
+shape key (`ShapeKeyBinding.channel` -> `.target`, `:60-63`), channel to FPD point role
+(`PointTransform.channel` -> `.role`, `:31-36`) and point role to bone (`BoneBinding.point` ->
+`.target`, `:80-86`) — the derived starting point already exists (`matcher.py:37-57` into
+`wizard.py:66-74`), the user override already exists (include/exclude at `ui.py:184` plus a hand edit
+of the JSON), and the document already round-trips (`profile.py:120-174`, proven by
+`tests/test_rigprofile_profile.py:21-46`). No consumer anywhere resolves a binding by semantic role:
+binding resolves by exact shape-key name and exact pose-bone name. A second role-keyed map would have
+no reader, which is the duplicated-structure defect this document itself warns about.
+
+What the recon found instead, now recorded as R8 and R9, are real defects rather than a missing class.
+The leftover evidence it also produced, worth keeping:
+
+- The review table's target cell is **read-only** (`addon/ui.py:184-187`), so the only in-Blender
+  override is include/exclude; a genuine retarget means editing the profile JSON by hand, which the
+  code's own prose already assumes (`addon/rigprofile/defaults.py:3-6`). That is R6's job.
+- The matcher can only propose `ARKIT_CHANNELS` (`matcher.py:39-41`) and `build_profile` drops anything
+  outside the catalog (`build.py:37`), which is R2's discovery problem.
+- `rx..tz` pose channels (`addon/schema.py:23`, written as `rc_pose_<key>`) have **no profile
+  representation at all**: the runtime only ever reads `packet.shapes` (`binding.py:91`), so driving a
+  head bone from head pose is expressible nowhere. Whether a profile may do that is an open question,
+  not a defect.
+- `addon/rigprofile/profile.py` is the ONE place a channel string is a free, unvalidated string
+  (`:60`), while the packet schema accepts arbitrary shape names (`addon/schema.py:105-108`). That is
+  deliberate (the OpenSeeFace translation table is R2's problem) and is not a bug.
+
+### Operational constraint discovered while a live session runs
+
+`camera-to-rig.cmd` runs `tools/blender_mpfb_live.py`, and that harness imports the addon **from disk**:
+`from addon.ui import _get_consumer` (`:238`), `from addon.wizard import _skip_detail` (`:247`) and
+`from addon.rigprofile.channels import ARKIT_CHANNELS` (`:496`). Editing any of those files while a
+session is live can therefore break a run the owner is performing at that moment, and a failure he
+sees during his own test is indistinguishable from a broken tool. **Rule: while a live session is
+running, only new files that nothing imports yet may be written.** Pure units are unaffected (R5a is a
+new module no one imports); R8, R2, R4, R6 and anything in `addon/binding.py`, `addon/wizard.py`,
+`addon/ui.py` or the existing `addon/rigprofile/` modules wait for a quiet session.
 
 ### R5a - evidence
 
