@@ -40,7 +40,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--fps", type=int, default=30, help="capture fps cap")
     parser.add_argument("--host", default="127.0.0.1", help="UDP host to send to")
     parser.add_argument("--port", type=int, default=11111, help="UDP port to send to")
-    parser.add_argument("--visualize", action="store_true", help="show a live preview window")
     parser.add_argument(
         "--dashboard",
         type=int,
@@ -183,9 +182,6 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-
-    if args.visualize:
-        logger.warning("--visualize is not implemented yet; running headless capture")
 
     try:
         backend = build_backend(args)

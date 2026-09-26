@@ -6,16 +6,20 @@ binds the RealCapture scan -> bind workflow against it, feeds one capture
 packet through the REAL consumer apply path, and reports which shape keys
 actually moved away from Basis (with the controlled vertex index and delta).
 
-The character is NOT committed to the repository. It is generated with MPFB2
-into a temporary, isolated Blender configuration (factory startup + temp
-BLENDER_USER_* dirs). One-time character generation (outside the repo):
+The character is NOT committed to the repository, and there is NO committed
+generator script. It must be created once, by hand, inside Blender with the
+MPFB2 add-on installed: generate a human, and save the scene as a .blend.
+One-time MPFB2 installation (outside the repo, into an isolated Blender
+configuration):
 
     export BLENDER_USER_CONFIG=<tmp>/env/config \
            BLENDER_USER_SCRIPTS=<tmp>/env/scripts \
            BLENDER_USER_EXTENSIONS=<tmp>/env/extensions \
            BLENDER_USER_DATA=<tmp>/env/data
     blender -b --factory-startup --command extension install-file mpfb-2.0.8.zip --repo user_default
-    blender -b --factory-startup --python gen_character.py   # creates character.blend
+
+The character .blend path is given by the RC_CHARACTER environment variable,
+or by the RC_MPFB_ROOT default layout (<RC_MPFB_ROOT>/tmp/character.blend).
 
 Run this harness (same env vars still exported):
 

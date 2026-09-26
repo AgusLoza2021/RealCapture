@@ -17,11 +17,27 @@ REM                                     (so the launcher can be tested)
 REM
 REM  Pressing a key in this window stops the capture.
 REM
+REM  Exit codes (one cause each):
+REM    0  stopped normally
+REM    3  the capture pipeline did not answer on its dashboard port in time
+REM    4  the backend Python virtualenv is missing (backend\.venv)
+REM    5  usage error (unknown or incomplete command-line arguments)
+REM
+REM  Portability: nothing machine-specific lives in this file. Put "set VAR=value"
+REM  lines into local.cmd next to this launcher; it is sourced when present and
+REM  its absence is normal. Blender is NOT started by this launcher, so it does
+REM  not touch RC_BLENDER/RC_MPFB_ROOT: the window opens fine without Blender,
+REM  and its light simply reads red with a reason until Blender joins.
+REM
 REM  NOTE: ping, not timeout: "timeout" can resolve to a non-Windows binary on
 REM  a PATH that also contains git-bash / MSYS tools.
 REM ============================================================================
 setlocal
 cd /d "%~dp0"
+
+REM Machine-specific overrides (optional, gitignored), sourced before any
+REM argument or default below is resolved. Absent file is the normal case.
+if exist "%~dp0local.cmd" call "%~dp0local.cmd"
 
 set "PORT=8765"
 set "CAMERA=0"
@@ -50,7 +66,7 @@ if /i "%~1"=="--no-browser" (
 echo ERROR: unknown or incomplete argument "%~1"
 echo Usage: control-room.cmd [--port N] [--camera N] [--no-browser]
 endlocal
-exit /b 2
+exit /b 5
 
 :args_done
 REM This launcher uses ONLY the project virtualenv. It deliberately does not
@@ -66,7 +82,7 @@ echo   backend\.venv\Scripts\python -m pip install -r backend\requirements.txt
 echo See backend\README.md for the exact dependency list.
 pause
 endlocal
-exit /b 2
+exit /b 4
 
 :have_python
 echo === RealCapture control room: camera %CAMERA%, dashboard port %PORT% ===

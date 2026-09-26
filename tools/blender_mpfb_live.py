@@ -7,18 +7,23 @@ The missing third thing between the two other demos:
 - THIS file                   -> the real character, bound through the addon,
                                  driven live by UDP packets from the camera
 
-The character is NOT in the repository. Use the generated MPFB2 human in the
-isolated Blender config (default path, override with --blend):
+The character is NOT in the repository. Use the generated MPFB2 human from
+your isolated Blender + MPFB2 environment. The path is resolved in this
+order (first one that exists wins):
 
-    C:/Users/Lozita/AppData/Local/Temp/rc_mpfb/tmp/character.blend
+    1. the --blend command-line argument
+    2. the RC_CHARACTER environment variable
+    3. the RC_MPFB_ROOT default layout: <RC_MPFB_ROOT>\tmp\character.blend
+       (RC_MPFB_ROOT itself defaults to %LOCALAPPDATA%\RealCapture\mpfb)
 
 MPFB2 lives in an isolated config: set these BEFORE launching Blender
 (the script cannot set them for a running Blender; without them MPFB2 is
-not found and the script exits with code 4):
+not found and the script exits with code 4). The demo launchers derive all
+three from RC_MPFB_ROOT automatically:
 
-    set BLENDER_USER_CONFIG=C:/Users/Lozita/AppData/Local/Temp/rc_mpfb/env/config
-    set BLENDER_USER_EXTENSIONS=C:/Users/Lozita/AppData/Local/Temp/rc_mpfb/env/extensions
-    set BLENDER_USER_DATA=C:/Users/Lozita/AppData/Local/Temp/rc_mpfb/env/data
+    set BLENDER_USER_CONFIG=<RC_MPFB_ROOT>\env\config
+    set BLENDER_USER_EXTENSIONS=<RC_MPFB_ROOT>\env\extensions
+    set BLENDER_USER_DATA=<RC_MPFB_ROOT>\env\data
 
 Producer (run in another terminal; do NOT run from this script):
 
@@ -28,8 +33,7 @@ Modes:
 
   GUI UDP listen (default; watch the face move in a real Blender window):
 
-      "C:/Program Files/Blender Foundation/Blender 4.5/blender.exe" \
-          --factory-startup --python tools/blender_mpfb_live.py -- [--port 11111]
+      blender.exe --factory-startup --python tools/blender_mpfb_live.py -- [--port 11111]
 
   Headless self-test (no camera, no network; proves the real consumer apply
   path moves a NAMED shape key on the real character):
@@ -98,7 +102,6 @@ EXIT_ERROR = 2
 EXIT_NO_BLEND = 3
 EXIT_NO_MPFB = 4
 
-DEFAULT_BLEND = "C:/Users/Lozita/AppData/Local/Temp/rc_mpfb/tmp/character.blend"
 MPFB_MODULE = "bl_ext.user_default.mpfb"
 DEFAULT_PORT = 11111
 DEFAULT_CHANNEL = "jawOpen"
@@ -167,10 +170,11 @@ POSE_OUTPUT_DIR = os.path.join(REPO_ROOT, "soak_output")
 PUMP_HZ = 30  # manual tick rate for the headless --seconds loop
 
 ENV_HINT = (
-    "MPFB2 env vars must be set before launching Blender:\n"
-    "  BLENDER_USER_CONFIG=C:/Users/Lozita/AppData/Local/Temp/rc_mpfb/env/config\n"
-    "  BLENDER_USER_EXTENSIONS=C:/Users/Lozita/AppData/Local/Temp/rc_mpfb/env/extensions\n"
-    "  BLENDER_USER_DATA=C:/Users/Lozita/AppData/Local/Temp/rc_mpfb/env/data"
+    "MPFB2 env vars must be set before launching Blender (the demo launchers "
+    "derive them from RC_MPFB_ROOT):\n"
+    "  BLENDER_USER_CONFIG=<RC_MPFB_ROOT>\\env\\config\n"
+    "  BLENDER_USER_EXTENSIONS=<RC_MPFB_ROOT>\\env\\extensions\n"
+    "  BLENDER_USER_DATA=<RC_MPFB_ROOT>\\env\\data"
 )
 
 PRODUCER_HINT = (
@@ -435,8 +439,8 @@ def _max_vertex_displacement(mesh_obj, rest_coords: list) -> float:
 
 
 def _setup_render(mesh_obj) -> None:
-    """Camera/lighting/render setup, same framing as /tmp/rc_mpfb_render3.py
-    (the script that produced the proven soak_output/mpfb_face_*.png set):
+    """Camera/lighting/render setup, same framing as the ad-hoc render script
+    that produced the proven soak_output/mpfb_face_*.png set:
     Cycles 64 samples denoised, 900x900, sun key+fill, track-to camera on the
     geometric head centre. A human can therefore compare pose renders against
     the existing face renders directly.
@@ -637,13 +641,40 @@ def _parse_args() -> dict:
     return parsed
 
 
+def _resolve_blend_path(explicit: str | None) -> str | None:
+    """Character .blend resolution order: --blend, RC_CHARACTER, RC_MPFB_ROOT.
+
+    Returns the first candidate that exists on disk, or None when none can be
+    resolved; the caller must then name all three ways to set the path and
+    exit with EXIT_NO_BLEND - never silently fall back to something else.
+    """
+    candidates: list[str] = []
+    if explicit:
+        candidates.append(explicit)
+    rc_character = os.environ.get("RC_CHARACTER")
+    if rc_character:
+        candidates.append(rc_character)
+    rc_root = os.environ.get("RC_MPFB_ROOT") or os.path.join(
+        os.environ.get("LOCALAPPDATA", ""), "RealCapture", "mpfb")
+    if rc_root:
+        candidates.append(os.path.join(rc_root, "tmp", "character.blend"))
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
 def main() -> int:
     args = _parse_args()
-    blend_path = args["blend"] or DEFAULT_BLEND
+    blend_path = _resolve_blend_path(args["blend"])
 
-    if not os.path.isfile(blend_path):
-        print(f"MPFB LIVE SKIPPED: character .blend not found: {blend_path!r} "
-              "(generate it with MPFB2 first, or pass a path after '--')")
+    if blend_path is None:
+        print("MPFB LIVE SKIPPED: no character .blend could be resolved. Set it "
+              "in one of these ways (checked in this order):")
+        print("  1. pass it explicitly:  -- --blend <path-to-character.blend>")
+        print("  2. the RC_CHARACTER environment variable")
+        print("  3. the RC_MPFB_ROOT default: <RC_MPFB_ROOT>\\tmp\\character.blend "
+              "(create the character once in Blender with MPFB2)")
         return EXIT_NO_BLEND
     if not _mpfb._mpfb_installed():
         print(f"MPFB LIVE SKIPPED: MPFB2 ({MPFB_MODULE}) is not installed in "
