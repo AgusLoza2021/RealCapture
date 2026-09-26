@@ -23,6 +23,10 @@ class UdpReceiver:
     so invalid ones among them are not counted -- but every stale discard is
     counted in the cumulative ``stale_dropped`` counter, so throttling and
     loss stay observable. ``reset_counters()`` zeroes both cumulative counters.
+
+    The address of the last drained datagram is kept in ``last_sender`` so
+    the back-channel can answer the sender on the SAME socket (no second
+    port, no handshake); see backchannel.py.
     """
 
     def __init__(self, host: str = "127.0.0.1", port: int = 11111, max_drain: int = DEFAULT_MAX_DRAIN) -> None:
@@ -35,10 +39,21 @@ class UdpReceiver:
         self._max_drain = max_drain
         self.invalid_count = 0
         self.stale_dropped = 0
+        self._last_sender: tuple[str, int] | None = None
 
     @property
     def bound_port(self) -> int:
         return self._sock.getsockname()[1]
+
+    @property
+    def last_sender(self) -> tuple[str, int] | None:
+        """Address the last drained datagram came from, or None if none yet."""
+        return self._last_sender
+
+    @property
+    def udp_socket(self) -> socket.socket:
+        """The receive socket itself, for replying on the same socket pair."""
+        return self._sock
 
     def poll_latest(self) -> Packet | None:
         """Drain the socket queue; decode and return the newest packet, or None.
@@ -51,9 +66,14 @@ class UdpReceiver:
         drained = 0
         for _ in range(self._max_drain):
             try:
-                data, _addr = self._sock.recvfrom(65535)
-            except BlockingIOError:
+                data, addr = self._sock.recvfrom(65535)
+            except OSError:
+                # BlockingIOError (queue empty) -- or, once the back-channel
+                # exists, ConnectionResetError on Windows when a heartbeat
+                # reply hit a port that has since closed (ICMP feedback).
+                # Either way this poll is done.
                 break
+            self._last_sender = addr
             newest = data
             drained += 1
         if newest is None:

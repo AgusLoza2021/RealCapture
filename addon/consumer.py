@@ -18,6 +18,7 @@ import time
 
 import bpy
 
+from .backchannel import HeartbeatSender, summarize_bind
 from .receiver import UdpReceiver
 from .session import ReplayScheduler, SessionError, SessionRecorder, read_session
 from .telemetry import CaptureStats
@@ -48,6 +49,11 @@ class CaptureConsumer:
         self._last_stale_seen = 0
         # Optional FacePointRig (set by the rig-connector bind operator).
         self.face_points = None
+        # Back-channel heartbeat (frozen contract W3): answers the last
+        # packet sender on the receive socket, cadence-capped and best-effort
+        # inside HeartbeatSender; it must never block or break this tick.
+        self._heartbeat = HeartbeatSender()
+        self._last_face_points = None
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -131,7 +137,61 @@ class CaptureConsumer:
         if stale_total > self._last_stale_seen:
             self.stats.record_stale_dropped(stale_total - self._last_stale_seen)
         self._last_stale_seen = stale_total
+        self._tick_heartbeat()
         return POLL_INTERVAL_S
+
+    # -- heartbeat back-channel -------------------------------------------------
+
+    def _tick_heartbeat(self) -> None:
+        """Answer the last packet sender with a heartbeat (best effort).
+
+        The revision bumps whenever the bind handle changes, so the UI can
+        tell a rebind from a steady state. Every skip (no packet seen yet,
+        cadence cap) and every send failure stays inside HeartbeatSender:
+        this must never block or break the consumer loop.
+        """
+        receiver = self._receiver
+        if receiver is None:
+            return
+        if self.face_points is not self._last_face_points:
+            self._last_face_points = self.face_points
+            self._heartbeat.bump_revision()
+        addr = receiver.last_sender
+        if addr is not None:
+            self._heartbeat.maybe_send(receiver.udp_socket, addr, self._bind_summary())
+
+    def _bind_summary(self) -> dict | None:
+        """Bind report for the heartbeat, from what the bind already knows.
+
+        Reads FacePointRig's entry lists (the bind layer owns its internals)
+        instead of inventing new measurements. With no bind at all the
+        report is None and the heartbeat still proves liveness.
+        """
+        rig = self.face_points
+        if rig is None:
+            return None
+        # Read the bind layer's fields defensively (they exist on
+        # binding.BindReport as of this writing): the attempt measurement
+        # and the revert residual are DIFFERENT numbers, and conflating
+        # them is the defect this report exists to prevent.
+        report = getattr(rig, "bind_report", None)
+        shape_channels = {e["channel"] for e in getattr(rig, "_shape_entries", [])}
+        point_channels = {
+            tr["channel"]
+            for transforms in getattr(rig, "_entries", {}).values()
+            for tr in transforms
+        }
+        return summarize_bind(
+            bone_path_active=bool(report.bone_path_active) if report else False,
+            has_shape_entries=bool(shape_channels),
+            head_bone=report.head_bone if report else None,
+            attempt_rest_displacement_m=(
+                getattr(report, "rest_displacement", None) if report else None),
+            residual_rest_displacement_m=(
+                getattr(report, "rest_displacement_after", None) if report else None),
+            skip_reason=getattr(report, "skip_reason", None) if report else None,
+            channels=len(shape_channels | point_channels),
+        )
 
     # -- application to the controller ----------------------------------------
 

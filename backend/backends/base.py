@@ -18,6 +18,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Callable
 
 from ..common.packets import Packet
+from ..dashboard.heartbeat import HeartbeatReader, HeartbeatTracker
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,11 @@ class CaptureBackend(ABC):
         self._socket: socket.socket | None = None
         self._packets_sent = 0
         self._send_errors = 0
+        # Blender back-channel (W3): heartbeat replies from the addon, read
+        # non-blockingly on the same socket the packets are sent on. None
+        # before start() (frozen seam consumed by the dashboard wiring).
+        self.heartbeat: HeartbeatTracker | None = None
+        self._heartbeat_reader: HeartbeatReader | None = None
         # Optional dashboard hooks (see backend/dashboard/hub.py). Called from
         # the capture thread; must never raise into the capture loop.
         self.on_packet: Callable[[Packet, float], None] | None = None
@@ -74,6 +80,12 @@ class CaptureBackend(ABC):
             raise RuntimeError("backend already started")
         self._stop_event.clear()
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Non-blocking: the same socket drains heartbeat replies on the send
+        # path, and a read must never block the capture loop. A UDP sendto
+        # on loopback does not wait on this setting under normal load.
+        self._socket.setblocking(False)
+        self.heartbeat = HeartbeatTracker()
+        self._heartbeat_reader = HeartbeatReader(self.heartbeat)
         self._thread = threading.Thread(
             target=self._guarded_loop, name=f"realcapture-{self.backend_name}", daemon=True
         )
@@ -96,6 +108,8 @@ class CaptureBackend(ABC):
         if self._socket is not None:
             self._socket.close()
             self._socket = None
+        self._heartbeat_reader = None
+        self.heartbeat = None
         logger.info("%s backend stopped", self.backend_name)
 
     def __enter__(self) -> "CaptureBackend":
@@ -186,3 +200,21 @@ class CaptureBackend(ABC):
                     logger.exception("on_send_error observer failed")
             if self._send_errors <= 5 or self._send_errors % 500 == 0:
                 logger.warning("UDP send failed (%d so far): %s", self._send_errors, exc)
+        self._poll_heartbeat()
+
+    def _poll_heartbeat(self) -> None:
+        """Drain addon heartbeat replies on the send socket (never raises).
+
+        Runs after every packet send, on the capture thread. The read is
+        non-blocking and bounded, so it cannot delay the next send; any
+        unexpected failure is logged and swallowed, never raised into the
+        capture loop.
+        """
+        reader = self._heartbeat_reader
+        sock = self._socket
+        if reader is None or sock is None:
+            return
+        try:
+            reader.poll(sock)
+        except Exception:  # noqa: BLE001 - read path must not break capture
+            logger.exception("heartbeat poll failed")
