@@ -1,6 +1,7 @@
 # Feature: Live demo harness — make the rig visible in a Blender window
 
 Status: **in progress** (authorized by the owner: "dale mecha a todas estas", 2026-09-25).
+A real-character live mode was added 2026-09-26 (commit `38f886a`); see "On a real character, live".
 
 ## Why this exists
 
@@ -119,6 +120,51 @@ backend/.venv/Scripts/python.exe backend/run_capture.py --engine mediapipe --cam
 
 Press `0` (or numpad 0) to look through the demo camera. Headless checks:
 `-- --self-test` and `-- --render soak_output/live_demo.png`.
+
+## On a real character, live (commit `38f886a`, 2026-09-26)
+
+The proxy sheet proves the path but is not a face. A second live harness now drives the real generated
+MPFB2 character, so the thing the owner watches move is an actual human face.
+
+```
+camera-to-rig.cmd            :: camera 0, one double-click: pipeline + Blender
+camera-to-rig.cmd 1          :: camera 1
+```
+
+The launcher starts `backend/run_capture.py --engine mediapipe --camera <n> --fps 30 --port 11111` in
+its own window, waits, then opens Blender on
+`C:/Users/Lozita/AppData/Local/Temp/rc_mpfb/tmp/character.blend` with the isolated MPFB2 config
+exported, and stops the pipeline when the Blender window closes. It waits with `ping`, not `timeout`:
+`timeout` resolves to a non-Windows binary on a PATH that also carries git-bash/MSYS.
+
+Headless, no camera and no display:
+
+```
+blender.exe -b --python tools/blender_mpfb_live.py -- --self-test          # inject one packet, exit 0
+blender.exe -b --python tools/blender_mpfb_live.py -- --self-test --value 0 # mutation, exit 1
+blender.exe -b --python tools/blender_mpfb_live.py -- --seconds 20          # bounded real UDP run
+```
+
+`--seconds N` exits 0 only when packets actually arrived (`MPFB LIVE OK`), otherwise 1
+(`MPFB LIVE FAILED: no packets received`) after exactly N seconds of loop time, so it cannot hang.
+The bind on this character legitimately reports **shape keys only** — see T9 in
+`free-rig-integration.md` — and every mode prints that warning instead of hiding it.
+
+**Why the live camera run cannot be part of a headless check.**
+`backend/backends/mediapipe_backend.py:207-208` returns `None` when `result.face_blendshapes` is
+empty, so with nobody in front of the camera the backend sends **no packets at all**. A live run with
+no face therefore reads 0 packets and looks like a failure; it is the absence of a detection, not a
+broken chain. Proof of the two halves is split on purpose: camera -> packet was proven with a real
+camera and a real face earlier in the session, packet -> real character shape keys is proven by
+`--self-test` and by a synthetic `encode_packet` sender (90 packets at ~30 fps, `MPFB LIVE OK`).
+
+## Changes
+
+| File | Status |
+| --- | --- |
+| `tools/blender_live_demo.py` | existing; proxy sheet, unchanged |
+| `tools/blender_mpfb_live.py` | **new**; real character, live + self-test + bounded run |
+| `camera-to-rig.cmd` | **new**; one-command launcher for the real character |
 
 ## Findings reported instead of patched
 

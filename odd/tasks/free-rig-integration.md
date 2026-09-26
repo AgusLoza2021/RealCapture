@@ -69,7 +69,7 @@ the M3 documentation. A third-party CC-BY asset must never be vendored silently.
 | T6 | Record the real-rig rig profile and the face-point placement/gain values that worked, as a preset under `addon/presets/`, so path A or B is reproducible without re-tuning. | T5 |
 | T7 | Automate the real-rig check the way the synthetic one is automated, so M2/M3 have a regression gate on a real character. | T5 |
 | T8 | Feed the findings back: record the rig-scale and rotation-control gaps as their own decisions (rig-size normalization, and whether to enable `copy_rotation`), rather than silently widening this doc. | T5 |
-| T9 | **NEW DEFECT, found 2026-09-25 on MPFB2 and it is a connector defect, not an MPFB2 bug.** Head-bone auto-detection picks a bone by name prefix only and never checks that the bone is anywhere near the head. On the MPFB2 rig the bone named `head` sits at **z = 0.697 m** (confirmed twice: `bone.head_local.z` and the posed world position both read 0.697) on a **1.667 m** figure, while the actual skull is held by FACS muscle bones at **z = 1.56–1.65 m** (`special05.R`, `oculi01.R`, `temporalis01.R`). The face-point empties are parented to that head bone and the 3 bound bones follow them with `copy_location`, so the mesh is torn apart. Needs a geometric sanity check on the head bone plus the missing minimum bind gate. | T5 |
+| T9 | **NEW DEFECT, found 2026-09-25 on MPFB2 and it is a connector defect, not an MPFB2 bug.** Head-bone auto-detection picks a bone by name prefix only and never checks that the bone is anywhere near the head. On the MPFB2 rig the bone named `head` sits at **z = 0.697 m** (confirmed twice: `bone.head_local.z` and the posed world position both read 0.697) on a **1.667 m** figure, while the actual skull is held by FACS muscle bones at **z = 1.56–1.65 m** (`special05.R`, `oculi01.R`, `temporalis01.R`). The face-point empties are parented to that head bone and the 3 bound bones follow them with `copy_location`, so the mesh is torn apart. Needs a geometric sanity check on the head bone plus the missing minimum bind gate. **CLOSED 2026-09-26 (commit `171da07`); see the closure section below.** | T5 |
 
 ## Path A execution plan (T3)
 
@@ -145,6 +145,60 @@ unpinned dependency: **a check that reports success over a broken artifact.**
 the upper part of the mesh, and when it is not, either refuse the bone/point path outright or bind
 **shape keys only** — which for MPFB2 is already a complete, correct 52/52 mapping. A muscle-bone
 rig should not be driven by `copy_location` at all.
+
+### T9 CLOSED, 2026-09-26 (commit `171da07`)
+
+Implemented exactly as above, plus the minimum bind gate the connector never had.
+
+- `addon/rigprofile/headbone.py` (new, pure, no `bpy`): `choose_head_bone()` requires the lowercased
+  name to start with `head` **and** the bone to sit at or above the mesh midpoint plus a 5 %-of-height
+  margin; the highest qualifying bone wins, otherwise `None`. `exceeds_rest_gate()` is the ceiling
+  (`REST_GATE_THRESHOLD = 0.25 m`). `is_gate_measurable()` is the order-independent mesh-selection
+  rule.
+- `addon/binding.py`: with no qualifying head bone the point/bone path is skipped and the bind falls
+  back to **shape keys only**; after the bone path, `_measure_rest_displacement()` evaluates the
+  depsgraph with every shape key at 0 and compares against Basis; on failure
+  `_remove_point_bone_bindings()` removes the `RC_follow_*` constraints and the FPD empties, restores
+  the pre-bind pose, and the residual is **measured, not assumed**.
+- `addon/wizard.py`: a rejected point/bone path is reported as a WARNING naming the measured
+  displacement, the rejected bone, its height and the fix — never as full success.
+- `tests/test_headbone_gate.py`: 32 pure tests. Suite 178 → **210 passed**.
+- **The 0.25 m threshold is deliberately loose.** The empties are placed by `_default_offset`, a rough
+  guess, so an artist-repositioned rig legitimately moves bones by ~0.1–0.15 m; a 1 cm gate would
+  false-positive. 0.25 m is "clearly broken" territory and catches the 0.8211 m tear. The measured
+  number is always recorded and reported even when the gate passes.
+
+Measured on the real character (`C:/Users/Lozita/AppData/Local/Temp/rc_mpfb/tmp/character.blend`),
+with every shape key at 0 and the baseline taken from a fresh open with no bind at all:
+
+| | before T9 | after T9 |
+| --- | --- | --- |
+| worst vertex displacement vs Basis | **0.8211 m** | **0.0000 m** |
+| FPD empties left behind | 11 | 0 |
+| `RC_follow_*` constraints left behind | 3 | 0 |
+| operator message | "Bound: 52 shape keys, 3 bones, 11 point transforms" | WARNING naming the rejection and the fix |
+| `jawOpen = 0.9` still moves the mesh | — | 0.0349 m by shape key |
+
+Visually confirmed by re-rendering the same two poses through the addon path: the neck and skull are
+intact and the face is a clean, recognizable smiling human. The torn renders are kept alongside them
+as `soak_output/mpfb_face_*_TORN_before_t9.png` (renders are gitignored).
+
+**Two lessons worth keeping.**
+
+1. **The first version of the gate was dead by construction and its own author reported it as
+   working.** It selected meshes by a marker property (`rc_driven_shapekeys`) that is written *after*
+   the gate runs, so the candidate list was empty, the measurement was `None` and the gate never
+   fired. The independent verification caught it: the mesh was still torn 0.8211 m with the "fixed"
+   code loaded. `is_gate_measurable()` plus tests now pin the selection rule, and the fix is only
+   accepted because the number moved.
+2. **Measure a baseline before calling a delta damage.** The first post-fix reading was 0.0621 m,
+   which looked like leftover damage from an incomplete revert. It was the file's own saved non-zero
+   shape values: the same 0.0621 m appears on a fresh open with no bind at all, and drops to
+   0.0000 m once the values are zeroed. Two candidate root causes were chased (a dead counter, then
+   leftover pose) before the baseline measurement settled it. The pose-restore in
+   `_remove_point_bone_bindings` was kept as correct undo semantics, but it is **not** what fixed the
+   number, and it is documented as not load-bearing here: `copy_location` drives the evaluated
+   matrix without writing `pose_bone.location`.
 
 ## Evidence
 
