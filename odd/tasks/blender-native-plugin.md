@@ -82,11 +82,17 @@ but it stops being the only path.
 12. **One version, two declarations.** `blender_manifest.toml`'s `version`
     must equal `bl_info["version"]`, and its `name` must equal
     `bl_info["name"]`; a test pins both equalities.
-13. **The package directory keeps its name.** The repository's `addon/`
-    directory stays `addon/` (the dev-mode harness imports `addon.ui`). The
-    extension build stages a copy under a directory named after the manifest
-    `id`, so nothing in the repository is renamed. Build output goes to
-    `dist/`, which becomes gitignored.
+13. **The package directory keeps its name; the staged tree is flat.** The
+    repository's `addon/` directory stays `addon/` (the dev-mode harness
+    imports `addon.ui`), and nothing in the repository is renamed. The build
+    stages a COPY of its contents FLAT next to the manifest
+    (`dist/blender_manifest.toml` + `dist/__init__.py` + the modules). The
+    nested `dist/<id>/` layout this contract demanded first is WRONG: Blender's
+    own validator rejects it (`Error, file missing from add-on:
+    __init__.py`), and Blender creates the `<id>/` directory itself at install
+    time (`BLENDER_USER_EXTENSIONS/<repo>/<id>/`), which is exactly what keeps
+    the package's relative imports working after the rename. Build output goes
+    to `dist/`, which becomes gitignored.
 14. **License.** `license = ["SPDX:GPL-3.0-or-later"]` in the manifest, the
     same as the repository's `LICENSE`.
 
@@ -115,20 +121,62 @@ expanding `%PORT%` defines it first, that the value is a usable port, that
 camera-to-rig's value equals `parse_args([]).port` from the backend itself, and
 that the constant is actually expanded.
 
-### P1 - packaging: manifest, staging build, the real validator, Blender loading it
+### P1 - packaging: manifest, staging build, the real validator, Blender loading it (done)
 
 Deliverable: `packaging/blender_manifest.toml` (source of truth),
-`tools/build_extension.py` (stage `dist/<id>/` plus the manifest, then
-optionally validate), `tests/test_extension_packaging.py` (version and name
-parity with `bl_info`, no machine path inside the manifest), `dist/` added to
-`.gitignore`, and the README install line.
+`tools/build_extension.py` (stage the flat tree plus the manifest, then
+optionally validate or build), `tests/test_extension_packaging.py` (version and
+name parity with `bl_info`, the GPL-3.0-or-later SPDX id, the staged layout, no
+absolute `import addon` inside the package, `dist` gitignored, no machine path
+inside shipped files), `dist` added to `.gitignore`, and the README test-count
+pin.
 
 Acceptance: Blender's own installed validator exits 0 on the staged directory
-(`blender --command extension validate <staged>`, output pasted as evidence),
-`blender --command extension build` produces a zip, that zip installs into an
-isolated `BLENDER_USER_EXTENSIONS`, and a headless Blender run reports the
-extension in `addon_utils.modules()`. The validator is the spec; the online
+(output pasted as evidence), `blender --command extension build` produces a
+zip, that zip installs into an isolated `BLENDER_USER_EXTENSIONS`, and a
+headless Blender run loads the extension. The validator is the spec; the online
 manifest documentation 404s.
+
+**Contract amendment, from Blender's own tooling.** The acceptance criteria
+above replaced `addon_utils.modules()` with the import + enable path, and rule
+13's nested `dist/<id>/` staging with the flat one, because the nested layout
+is not a layout Blender accepts: `validate` fails it with `Error, file missing
+from add-on: __init__.py`, and the `<id>/` directory is created by Blender at
+install time.
+
+**Acceptance, reproduced by the parent** (not taken from the writer's report):
+
+- `blender --command extension validate --valid-tags="" dist` ->
+  `Success parsing TOML in "dist"`, exit 0.
+- `blender --command extension build --source-dir dist --output-dir dist
+  --valid-tags=""` -> `created: "dist\realcapture-0.1.0.zip", 45808`, exit 0.
+  The zip's entries sit at its ROOT (`blender_manifest.toml`, the modules,
+  `rigprofile/`, `presets/`), which is what Blender extracts into
+  `<repo>/<id>/`.
+- `blender --command extension install-file dist/realcapture-0.1.0.zip --repo
+  user_default --enable` against an isolated `BLENDER_USER_EXTENSIONS` -> exit
+  0, and the tree that appears is
+  `<ext>/user_default/realcapture/{blender_manifest.toml,__init__.py,...}`;
+  `--command extension list` reports `realcapture [installed]: "RealCapture"`.
+- Headless Blender in the same isolated environment:
+  `importlib.import_module("bl_ext.user_default.realcapture")` -> `IMPORT OK`
+  with `bl_info` intact; `bpy.ops.preferences.addon_enable(module=...)` ->
+  `ENABLED: True`; `RC_PT_main_panel` and `RC_PT_rig_connector_panel`
+  registered; `dir(bpy.ops.realcapture)` = `bind_rig, load_profile,
+  replay_session, scan_rig, start_capture, stop_capture, unbind_rig`;
+  `addon_disable` -> `DISABLED: True`; exit 0.
+- Mutation proofs, in the parent's hands: manifest `version` `0.1.0` -> `9.9.9`
+  fails `test_manifest_version_matches_bl_info`; a temporary
+  `addon/_zz_probe_import.py` containing `import addon` fails
+  `test_staged_package_has_no_absolute_addon_imports`. Both restored -> 8
+  passed.
+- Canonical suite after the README pin moved 402 -> 410: `410 passed,
+  1 warning`.
+- Checked and accepted, not fixed: a top-level `packaging/` directory could
+  shadow the PyPI `packaging` module as a namespace package, but a regular
+  package found later on `sys.path` wins, and the measurement confirms it
+  (`python -c "import packaging"` from the repo root resolves to
+  site-packages). Nothing in this repository imports `packaging`.
 
 ### P2 - `addon/backend_process.py`: the launcher core, pure and bpy-free
 
