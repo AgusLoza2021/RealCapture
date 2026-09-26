@@ -1,7 +1,9 @@
 # Feature: Free-rig integration — drive a real downloaded character
 
-Status: **proposed — waiting on one owner pick (path A/B/C below).** Read-only exploration done
-2026-09-25; nothing downloaded, nothing committed.
+Status: **path A executed 2026-09-25/26 — MPFB2 acquired and a real character driven.** The
+shape-key path is proven perfect (**52/52 exact**); the bone path is **defective and visibly tears a
+real rig**, which is now T9. T1 and T2 are answered. Nothing third-party has been committed and
+nothing may be.
 
 ## Why this exists
 
@@ -22,15 +24,18 @@ Mapped read-only with file:line evidence. This is the acceptance criteria for an
 | Shape keys | **Implemented.** The consumer writes `key_block.value` directly each tick, no drivers; profile `shapekey_bindings` resolve to key blocks | `addon/binding.py:62,177` |
 | Bones | **Implemented, but as pose-bone `copy_location`.** The wizard only ever emits `copy_location`; `copy_rotation` and `damped_track` exist in the schema and are reachable only by hand-editing the profile JSON | `addon/binding.py:217,241`; `addon/rigprofile/profile.py:19` |
 | Helper empties on a rig | **Not supported as a target.** The connector creates its *own* face-point empties, parented to the head bone, and makes rig bones follow them. It cannot drive a rig's pre-existing helper objects | `addon/binding.py:119,144` |
-| Head bone | Required, or the bind raises `No head bone found`. Auto-detection only accepts a bone whose lowercased name **starts with** `head`, so `mixamorig:Head` or `DEF-head` must be set explicitly | `addon/binding.py:123,169` |
-| Minimum bind gate | **None.** A bind with zero matches succeeds and does nothing — a silent no-op, so a "successful" bind proves nothing | `addon/rigprofile/matcher.py` |
+| Head bone | Required, or the bind raises `No head bone found`. Auto-detection only accepts a bone whose lowercased name **starts with** `head`, so `mixamorig:Head` or `DEF-head` must be set explicitly. **Materialized as a real defect on MPFB2 — see T9: on a FACS muscle-bone rig the bone named `head` is not at the head at all.** | `addon/binding.py:123,169` |
+| Minimum bind gate | **None.** A bind with zero matches succeeds and does nothing — a silent no-op, so a "successful" bind proves nothing. **Confirmed and worse than documented: the bind on MPFB2 reported full success (`52 shape keys, 3 bones, 11 point transforms`) while visibly tearing the character.** | `addon/rigprofile/matcher.py`; T9 below |
 | Gains and offsets | Absolute meters, no rig-size normalization; the default face-point offsets are documented rough guesses | `addon/rigprofile/defaults.py`; `addon/binding.py:155` |
 | Rig scale | A centimetre-scale or oversized rig will move the wrong amounts | same |
 
-**The one unknown that decides everything:** MediaPipe's blendshape `category_name` values are
-forwarded verbatim and looked up by their exact ARKit channel name, and **no test asserts the two
-vocabularies agree**. If they differ by even one name, that channel silently never moves. This must
-be measured before any rig work (T1).
+**The channel vocabulary is no longer unknown (T1 answered).** Measured live on 2026-09-25:
+MediaPipe emits 52 categories — the 51 ARKit names plus `_neutral` — so the shape-key path matches
+by exact name for essentially every channel, and `tongueOut` can never arrive. What remains true is
+the *defence* gap: the lookup is exact string equality with no normalization layer and no minimum
+bind gate, so a rig whose shape keys are named anything else binds "successfully" and moves
+nothing. **The rig's own key names are therefore the first thing to verify**, which is what the T3
+plan below does before anything is built on top of it.
 
 ## Candidates (licenses and versions checked 2026-09-25)
 
@@ -57,13 +62,40 @@ the M3 documentation. A third-party CC-BY asset must never be vendored silently.
 | id | Task | Depends on |
 |---|---|---|
 | T1 | **Verify the vocabulary seam. ANSWERED 2026-09-25 — see `odd/tasks/producer-vocabulary-contract.md`.** The seam is exact string equality at `addon/binding.py:55-71` with **no normalization layer anywhere** (the layer `docs/realcapture-tdd.md:153` claims as a mitigation does not exist); OpenSeeFace resolves **0 of its 16** producer names; **16 of the 52** channels have no default point transform; and MediaPipe's real name set **cannot be read from the repository** (the model is downloaded at runtime and `backend/models/` does not exist). One real run with a webcam produces the name set for free, because `addon/consumer.py:129` exposes every producer name as `rc_shape_<name>`. T2 below still blocks T3–T8. | none |
-| T2 | Decide the path (A, B, or C) and record the license line. | owner |
-| T3 | Acquire the rig outside the repo, with provenance recorded: path A installs MPFB2 from the extensions platform and exports a copy with ARKit face units; path B downloads one VALID VRM and imports it with the VRM add-on. | T2 |
+| T2 | **Path A chosen by the owner (2026-09-25): MPFB2.** License line for the M3 docs: MPFB2 code is **GPLv3**, its asset packs (including `faceunits01`) are **CC0**, and a character a user generates with it carries no attribution obligation. No vendoring: the asset is generated locally and lives outside the repository. | done |
+| T3 | **DONE 2026-09-25.** MPFB2 **2.0.8** installed into an isolated Blender config (newer versions exist only on the extensions platform, whose direct download returned an HTML challenge page), plus the **`faceunits01`** pack from `files.makehumancommunity.org/functional/faceunits01.zip` (CC0). A default human with the standard rig and the 52 face-unit targets was generated to a `.blend` outside the repo. **The head-mesh vocabulary is ARKit-52 exactly: 52 present in both, 0 only in MPFB, 0 only in ARKit.** The pack ships one `.target` per ARKit channel, so this is not "compatible", it is the same vocabulary. The scan matched **52/52 shape-key proposals at exact confidence**. (Beside them the mesh carries MPFB-internal non-ARKit keys — `Basis` and 8 `$md-…` macro keys, 61 total — which the scan correctly ignores.) | done |
 | T4 | Write a real-rig harness. `tools/blender_smoke_test.py` hard-codes its synthetic names and calls `build_scene()` unconditionally, so opening a real `.blend` would still create and test the synthetic rig (and collide into `.001` names). Add a script that opens a given `.blend`/`.vrm`, assigns `rig_armature` / `rig_face_mesh` / `rig_head_bone`, runs scan → bind, feeds a packet, and inspects the result. Do not modify the committed synthetic smoke test. | T3 |
-| T5 | Prove motion: drive a packet and show a **named** shape key moving on the real mesh, with its asserted value. "The bind succeeded" is not evidence, because there is no minimum bind gate. | T4 |
+| T5 | **PARTIAL — see below.** The shape-key path is proven on a real character; the bone path tears it. "The bind succeeded" is still not evidence, exactly as this doc predicted. | T4 |
 | T6 | Record the real-rig rig profile and the face-point placement/gain values that worked, as a preset under `addon/presets/`, so path A or B is reproducible without re-tuning. | T5 |
 | T7 | Automate the real-rig check the way the synthetic one is automated, so M2/M3 have a regression gate on a real character. | T5 |
 | T8 | Feed the findings back: record the rig-scale and rotation-control gaps as their own decisions (rig-size normalization, and whether to enable `copy_rotation`), rather than silently widening this doc. | T5 |
+| T9 | **NEW DEFECT, found 2026-09-25 on MPFB2 and it is a connector defect, not an MPFB2 bug.** Head-bone auto-detection picks a bone by name prefix only and never checks that the bone is anywhere near the head. On the MPFB2 rig the bone named `head` sits at **z = 0.697 m** (confirmed twice: `bone.head_local.z` and the posed world position both read 0.697) on a **1.667 m** figure, while the actual skull is held by FACS muscle bones at **z = 1.56–1.65 m** (`special05.R`, `oculi01.R`, `temporalis01.R`). The face-point empties are parented to that head bone and the 3 bound bones follow them with `copy_location`, so the mesh is torn apart. Needs a geometric sanity check on the head bone plus the missing minimum bind gate. | T5 |
+
+## Path A execution plan (T3)
+
+Order matters: the vocabulary check comes second, because everything after it is wasted if the key
+names do not match and the mismatch is silently absorbed by the missing bind gate.
+
+1. **Install MPFB2** into the Blender 4.5 installation (Blender extension or addon zip). The addon
+   itself is not vendored; it is an install on this host, and the install command is recorded.
+2. **Create a default human, add its face, and apply the `faceunits01` asset pack.** Then **enumerate
+   the actual shape-key names on the head mesh and diff them against `ARKIT_CHANNELS`**
+   (`addon/rigprofile/channels.py:16`). This is the load-bearing step.
+3. **Branch on that diff, honestly.** If the names are ARKit-52, proceed. If they are MakeHuman-style
+   names (`mouth_open`, `brow_up`, …), then the exact-name lookup at `addon/binding.py:55-71` will
+   bind nothing, and the shape-key path needs a mapping — which is a **new owner decision** (the same
+   one as T1 of `producer-vocabulary-contract.md`), not a silent private workaround inside a rig
+   profile.
+4. **Check the head bone.** A bone whose lowercased name starts with `head` is required or the bind
+   raises `No head bone found` (`addon/binding.py:123,169`). If MPFB2's rig names it differently, set
+   `rig_head_bone` explicitly in the profile rather than renaming a third-party rig.
+5. **Harvest to a `.blend` outside the repository**, because an MPFB2 install on this host is not
+   reproducible in another environment. Use whatever MPFB2 export path bakes the face units into
+   real shape keys rather than leaving them as generator parameters.
+6. Only then T4 (harness) and T5 (a **named** key moving).
+
+Explicitly out of scope for this pass: rig-size normalization, and rotation-based control support.
+Both are T8.
 
 ## Non-goals
 
@@ -73,6 +105,46 @@ the M3 documentation. A third-party CC-BY asset must never be vendored silently.
 - No connector redesign. Rotation-driven control support and rig-size normalization are
   separate features and are recorded as T8, not implemented here.
 - No claim that a successful scan/bind means the rig works.
+
+## What the real rig proved (2026-09-25/26)
+
+`tools/blender_mpfb_demo.py` opens the generated character, assigns `rig_armature` /
+`rig_face_mesh` / `rig_head_bone`, runs the real `scan_rig` → `bind_rig`, and pumps one packet
+through the real `CaptureConsumer._apply` path.
+
+**What works, proven with numbers.** All 52 ARKit channels are bound as `gain: 1.0`, exact
+name-to-same-name, in the profile the operator wrote. Fed `jawOpen = 0.9`, the head mesh's `jawOpen`
+key reads back **0.900** and a controlled vertex moves **0.0349** Blender units. The rendered result
+is a **recognizable human face** — eyes, nose, mouth, ears — and the expression reads clearly:
+`jawOpen 0.85` + both smiles `0.95` + blinks `0.55` produces a clean open-mouthed smile. The
+isolated measurement, applying the same values straight to the shape keys with no bind at all, is
+**0.0321 m** of maximum vertex displacement, which is exactly the scale a real face should move.
+**Path A is a perfect fit for the implemented shape-key path.**
+
+**What is broken, and how it was isolated.** With the bind in place the character is **visibly torn**
+— long stretched spikes radiating from the face — and it is torn **at rest, with every shape value at
+zero**, i.e. before a single packet arrives. The three-way isolation:
+
+| Condition | Armature modifier | Our bind | Max vertex move, all keys 0 | Result |
+|---|---|---|---|---|
+| Fresh open, keys set directly | on | none | **0.0000 m** | clean |
+| Fresh open, keys set directly | off | none | 0.0000 m | clean |
+| Real `bind_rig` then apply | on | **active** | spikes | **torn** |
+
+So the deformation is caused by the bind's own bone and point-transform work, not by MPFB2, not by
+the shape keys, and not by the armature at rest. The profile the operator wrote names the culprit:
+`head_bone: head`, 11 `points`, and 3 `bone_bindings` targeting `eye.L` / `eye.R` with
+`copy_location`. The empties those bones copy are parented to a head bone that is ~0.95 m below the
+the face, so the eye bones snap to the wrong place and drag the mesh with them — while the operator
+still reports **"Bound: 52 shape keys, 3 bones, 11 point transforms"**.
+
+This is the same failure family as the three vacuous metrics, the dead invalid counter, and the
+unpinned dependency: **a check that reports success over a broken artifact.**
+
+**The fix direction (T9).** Bind by geometry, not by name: validate that the detected head bone is in
+the upper part of the mesh, and when it is not, either refuse the bone/point path outright or bind
+**shape keys only** — which for MPFB2 is already a complete, correct 52/52 mapping. A muscle-bone
+rig should not be driven by `copy_location` at all.
 
 ## Evidence
 
@@ -86,4 +158,15 @@ the M3 documentation. A third-party CC-BY asset must never be vendored silently.
   `studio.blender.org/characters/snow/v3/` (CC-BY, layered face controls, 3.6 LTS),
   `studio.blender.org/characters/storm/v1/` (requires Blender 5.0 — excluded),
   `github.com/JRicardoSan/Blender-ARKit-compatible-heads` (MIT file, study-only asset).
-- No rig has been downloaded or opened yet.
+- No rig has been downloaded or opened yet. **SUPERSEDED 2026-09-25/26:** MPFB2 2.0.8 and the CC0
+  `faceunits01` pack were installed into an isolated config and a character was generated outside the
+  repository. The vocabulary verdict is 52/52 exact, the shape-key path is proven on a real face, and
+  the bone path is a new defect (T9). Renders: `soak_output/mpfb_raw_smile.png` (clean, shape keys
+  only, no bind — **a real human face with a clear expression**) and `soak_output/mpfb_face_neutral.png`
+  / `mpfb_face_smile.png` (same values through the bind — **torn, at rest**). `soak_output/` is
+  gitignored, so these images are local evidence only. The `.blend`
+  (`…/Temp/rc_mpfb/tmp/character.blend`, 18,009,107 bytes) lives outside the repository, as required.
+- Harness verification by the orchestrator, not taken on report: `tools/blender_mpfb_demo.py` exits
+  **0** on the real character and exits **1** under mutation (`--value 0` → `no vertex moved relative
+  to Basis on 'jawOpen'`), so its assertion can fail. Guard paths exit 3 (no `.blend`) and 4 (no MPFB).
+  178 tests pass.
