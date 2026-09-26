@@ -26,6 +26,8 @@ import threading
 from collections import deque
 from typing import Any, Callable, Dict, List, Optional
 
+from .status_model import build_connections
+
 STATUS_IDLE = "idle"
 STATUS_RUNNING = "running"
 STATUS_STOPPED = "stopped"
@@ -56,8 +58,20 @@ class DashboardHub:
         self,
         buffer_capacity: int = DEFAULT_BUFFER_CAPACITY,
         clock: Callable[[], float] = _default_clock,
+        camera_age_s: Optional[Callable[[], Optional[float]]] = None,
+        blender_source: Optional[Any] = None,
     ) -> None:
+        """Build the hub.
+
+        ``camera_age_s`` is an optional callable returning the camera frame
+        age in seconds (or None when unknown). ``blender_source`` is an
+        optional duck-typed heartbeat tracker exposing ``age_s(now)`` and
+        ``bind_report()`` (the W3 tracker matches). An absent source is a
+        fact like any other: its light goes red with a reason, never green.
+        """
         self._clock = clock
+        self._camera_age_s = camera_age_s
+        self._blender_source = blender_source
         self._lock = threading.RLock()
         self._created_s = clock()
         self._status = STATUS_IDLE
@@ -172,6 +186,16 @@ class DashboardHub:
                     "conf": self._last_packet["conf"],
                     "age_s": max(0.0, now_s - self._last_packet["sent_s"]),
                 }
+            camera_age = self._camera_age_s() if self._camera_age_s is not None else None
+            if self._blender_source is not None:
+                blender_age = self._blender_source.age_s(now_s)
+                blender_bind = self._blender_source.bind_report()
+            else:
+                blender_age = None
+                blender_bind = None
+            packets_age = (
+                None if self._last_packet is None else max(0.0, now_s - self._last_packet["sent_s"])
+            )
             return {
                 "status": self._status,
                 "engine": self._engine,
@@ -187,6 +211,7 @@ class DashboardHub:
                 "fps_history": list(self._fps_samples_locked()),
                 "proc_ms_history": list(self._proc_ms),
                 "channels": self.top_channels(),
+                "connections": build_connections(camera_age, packets_age, blender_age, blender_bind),
             }
 
     def _fps_locked(self, now_s: float) -> float:
