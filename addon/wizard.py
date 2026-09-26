@@ -14,6 +14,7 @@ from . import binding
 from .rigprofile import build as profile_build
 from .rigprofile import match_bones, match_shapekeys
 from .rigprofile.channels import ARKIT_CHANNELS
+from .rigprofile.headbone import REST_GATE_THRESHOLD
 from .rigprofile.profile import ProfileError, RigProfile
 
 
@@ -118,12 +119,48 @@ class REALCAPTURE_OT_bind_rig(bpy.types.Operator):
             return {"CANCELLED"}
 
         _store_face_points(context, face_points, profile)
-        self.report({"INFO"},
-                    f"Bound: {len(profile.shapekey_bindings)} shape keys "
-                    f"(consumer-driven), {len(profile.bone_bindings)} bones, "
-                    f"{len(profile.points)} point transforms. "
-                    f"Profile saved to {settings.rig_profile_path}")
+        _report_bind_result(
+            self, face_points, profile,
+            f"{len(profile.shapekey_bindings)} shape keys "
+            f"(consumer-driven), {len(profile.bone_bindings)} bones, "
+            f"{len(profile.points)} point transforms",
+            tail=f"Profile saved to {settings.rig_profile_path}")
         return {"FINISHED"}
+
+
+def _skip_detail(report: binding.BindReport) -> str:
+    """One actionable line for a bind whose point/bone path did not happen."""
+    if report.skip_reason == "rest_gate":
+        explicit = ", set explicitly" if report.head_bone_explicit else ""
+        return (f"point/bone path REJECTED: at-rest mesh displacement "
+                f"{report.rest_displacement:.4f} m exceeds the "
+                f"{REST_GATE_THRESHOLD:.2f} m safety gate (head bone "
+                f"'{report.head_bone}'{explicit}); reverted to "
+                "shape keys only. Fix that bone/anchors, or set 'rig_head_bone' "
+                "to a bone inside the skull, then rebind")
+    detail = ("point/bone path skipped: no 'head' bone sits in the upper "
+              "part of the mesh")
+    if report.rejected_bone and report.mesh_z_min is not None:
+        detail += (f"; nearest candidate '{report.rejected_bone}' at z="
+                   f"{report.rejected_z:.3f} is below the safe head zone "
+                   f"(mesh z {report.mesh_z_min:.3f}-{report.mesh_z_max:.3f})")
+    return detail + (". Set 'rig_head_bone' (e.g. a skull/FACS head bone) "
+                     "and rebind")
+
+
+def _report_bind_result(operator, face_points, profile, success_detail: str,
+                        tail: str = "") -> None:  # noqa: ANN001
+    """Honest result message: full-bind wording only when the bone path is
+    live, an actionable warning when it was skipped or gate-rejected."""
+    report = getattr(face_points, "bind_report", None)
+    suffix = f". {tail}" if tail else ""
+    if report is not None and report.skip_reason in ("no_head_bone", "rest_gate"):
+        operator.report(
+            {"WARNING"},
+            f"Bound {len(profile.shapekey_bindings)} shape keys (consumer-driven) "
+            f"only: {_skip_detail(report)}{suffix}")
+        return
+    operator.report({"INFO"}, f"Bound: {success_detail}{suffix}")
 
 
 class REALCAPTURE_OT_unbind_rig(bpy.types.Operator):
@@ -169,7 +206,8 @@ class REALCAPTURE_OT_load_profile(bpy.types.Operator):
             return {"CANCELLED"}
 
         _store_face_points(context, face_points, profile)
-        self.report({"INFO"}, f"Bound profile {profile.name!r} from {path}")
+        _report_bind_result(self, face_points, profile,
+                            f"profile {profile.name!r} from {path}")
         return {"FINISHED"}
 
 
