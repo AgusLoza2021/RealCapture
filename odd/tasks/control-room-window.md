@@ -275,6 +275,12 @@ concurrent writers. `_HeartbeatSource` re-reads `backend.heartbeat` instead of s
 because a restart replaces the tracker. `tests/test_run_capture_wiring.py` pins the late binding, and
 the mutation (snapshot the tracker in the constructor) makes exactly that test fail.
 
+**W8 additive seam (parent-owned).** `encode_or_reason(tap, frame)` at module level in
+`backend/dashboard/server.py` is the single place that decides "can this frame be encoded, or is
+there a reason to name". It is deliberately module level, and deliberately free of any cv2 import,
+so a test can pin it without OpenCV and so the endpoints share one verdict instead of one honest
+endpoint and one lying one.
+
 Suite: **346 passed, 1 warning**.
 
 **Still unverified at the end of this phase:** the window rendered in a real browser; the whole chain
@@ -351,6 +357,42 @@ Blender rig RED with its reason.
 Lesson carried into phase 2: a green suite that never executes the branch the human
 uses is not evidence about that branch. Add the browser to the verification loop for
 any UI slice, and read a real rendering - never a reasoned one.
+
+## W8 - the camera stream could answer 200 and send no bytes
+
+Found while phase 2 was blocked on a live session, by reading the two camera endpoints side by
+side. ``GET /camera.jpg`` already mapped an empty encode to a 503 naming the encoder
+(``server.py:302-307`` before the fix), but ``GET /camera.mjpg`` guarded only with ``if data:``
+inside the generator: an unbound encoder produced an endless 200 whose body never contained a
+byte. The reachable shape is worse than the latent one - ``build_jpeg_encoder()`` always returns
+a callable but imports cv2 lazily inside the closure (``server.py:85``), so on a host without
+cv2 the ``ImportError`` was raised from inside the streaming generator, after 200 and the
+multipart headers had already been committed. Neither endpoint turned an encoder exception into
+a stated reason either, so a broken encoder surfaced as a 500 instead of the missing thing,
+named.
+
+Fix: one module-level helper, ``encode_or_reason(tap, frame)``, which never raises and returns
+``(data, None)`` or ``(None, reason)``; both endpoints answer 503 with a plain-text reason
+through it. The stream path probe-encodes the peeked frame once and discards it, on purpose:
+that is what buys the promise that the stream will produce bytes.
+
+### What a test could not have told us
+
+TestClient answers ASGI in-process, and this project already paid once for trusting it: the whole
+dashboard suite stayed green while production uvicorn refused every ``/ws`` upgrade. So the check
+was run over real uvicorn and real HTTP, on three real servers:
+
+- no encoder bound - stream and one-shot both ``503``, reason "no JPEG encoder is bound to the
+  frame tap";
+- encoder raising exactly as a missing cv2 does - both ``503``, reason "JPEG encoding failed:
+  ModuleNotFoundError: No module named 'cv2'";
+- working encoder, anti-vacuity - stream still ``200`` with
+  ``multipart/x-mixed-replace; boundary=frame`` and JPEG magic in the first chunk; one-shot still
+  ``200 image/jpeg`` with ``Cache-Control: no-store``.
+
+Mutation proof: disabling the new guard makes the first case answer ``200`` and then send no bytes
+within the 3 s read timeout - the defect reproduced end to end over the wire. Restored, the suite
+is green: 455 passed. Commit ``beaf49e``.
 
 ## Open questions
 
