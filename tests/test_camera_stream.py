@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from backend.dashboard.frametap import FrameTap  # noqa: E402
 from backend.dashboard.hub import BroadcastHub, DashboardHub  # noqa: E402
-from backend.dashboard.server import create_app  # noqa: E402
+from backend.dashboard.server import create_app, encode_or_reason  # noqa: E402
 
 FAKE_JPEG = b"\xff\xd8\xff\xd9"
 
@@ -23,6 +23,13 @@ class CountingEncoder:
     def __call__(self, frame: object) -> bytes:
         self.calls += 1
         return FAKE_JPEG
+
+
+class RaisingEncoder:
+    """Encoder that always raises, standing in for a missing cv2 import."""
+
+    def __call__(self, frame: object) -> bytes:
+        raise ImportError("No module named 'cv2'")
 
 
 def _app_with_tap(tap: FrameTap, **kwargs) -> object:
@@ -80,6 +87,65 @@ class TestCameraStream:
         # The generator's finally unregistered the consumer: no phantom subscriber.
         assert tap.subscriber_count == 0
         client.close()
+
+
+class TestCameraStreamEncodingHonesty:
+    """A stream must never commit 200 and then produce zero bytes."""
+
+    def test_no_encoder_bound_answers_503_not_an_empty_stream(self) -> None:
+        tap = FrameTap()  # constructed without an encoder: _encode is None
+        tap.publish(b"raw-bgr-frame", 1.0)
+        client = TestClient(_app_with_tap(tap))
+        response = client.get("/camera.mjpg")
+        assert response.status_code == 503
+        assert "text/plain" in response.headers["content-type"]
+        assert response.text == "camera stream unavailable: no JPEG encoder is bound to the frame tap"
+        client.close()
+
+    def test_raising_encoder_stream_answers_503_naming_the_failure(self) -> None:
+        tap = FrameTap(encode=RaisingEncoder())
+        tap.publish(b"raw-bgr-frame", 1.0)
+        client = TestClient(_app_with_tap(tap))
+        response = client.get("/camera.mjpg")
+        assert response.status_code == 503
+        assert "text/plain" in response.headers["content-type"]
+        assert response.text == (
+            "camera stream unavailable: JPEG encoding failed: ImportError: No module named 'cv2'"
+        )
+        client.close()
+
+    def test_raising_encoder_one_shot_answers_503_naming_the_failure(self) -> None:
+        tap = FrameTap(encode=RaisingEncoder())
+        tap.publish(b"raw-bgr-frame", 1.0)
+        client = TestClient(_app_with_tap(tap))
+        response = client.get("/camera.jpg")
+        assert response.status_code == 503
+        assert "text/plain" in response.headers["content-type"]
+        assert response.text == (
+            "camera snapshot unavailable: JPEG encoding failed: ImportError: No module named 'cv2'"
+        )
+        client.close()
+
+
+class TestEncodeOrReason:
+    def test_success_returns_bytes_and_none(self) -> None:
+        tap = FrameTap(encode=CountingEncoder())
+        data, reason = encode_or_reason(tap, b"raw-bgr-frame")
+        assert data == FAKE_JPEG
+        assert reason is None
+
+    def test_unbound_encoder_returns_reason_naming_the_missing_thing(self) -> None:
+        tap = FrameTap()
+        data, reason = encode_or_reason(tap, b"raw-bgr-frame")
+        assert data is None
+        assert reason == "no JPEG encoder is bound to the frame tap"
+
+    def test_raising_encoder_returns_reason_with_exception_class_name(self) -> None:
+        tap = FrameTap(encode=RaisingEncoder())
+        data, reason = encode_or_reason(tap, b"raw-bgr-frame")
+        assert data is None
+        assert reason is not None
+        assert "ImportError" in reason
 
 
 class TestCameraOneShot:

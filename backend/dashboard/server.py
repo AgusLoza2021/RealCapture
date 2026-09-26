@@ -96,6 +96,23 @@ def build_jpeg_encoder(target_width: int = 640, quality: int = 80) -> Callable[[
     return encode
 
 
+def encode_or_reason(tap: Any, frame: Any) -> tuple[Optional[bytes], Optional[str]]:
+    """Encode one frame, or return the reason it cannot be encoded.
+
+    Returns ``(data, None)`` on success and ``(None, reason)`` otherwise.
+    The reason must name the missing thing, never be an empty string:
+    the endpoints turn it into a 503 instead of a stream that looks
+    healthy and produces nothing.
+    """
+    try:
+        data = tap.encode_frame(frame)
+    except Exception as exc:  # noqa: BLE001 - the caller wants a reason, not a raise
+        return None, f"JPEG encoding failed: {type(exc).__name__}: {exc}"
+    if not data:
+        return None, "no JPEG encoder is bound to the frame tap"
+    return data, None
+
+
 class SnapshotBridge:
     """Bridges thread-side BroadcastHub publishes into asyncio waiters."""
 
@@ -270,6 +287,14 @@ def create_app(
                 "camera stream unavailable: no frame has arrived from the capture loop yet",
                 status_code=503,
             )
+        # Probe: deliberately encode the frame that was just peeked once and
+        # discard it — it buys the promise that the stream will really
+        # produce bytes before we commit to a 200 multipart response.
+        probe = frame_tap.peek()
+        assert probe is not None  # guarded above
+        _, reason = encode_or_reason(frame_tap, probe[0])
+        if reason is not None:
+            return PlainTextResponse(f"camera stream unavailable: {reason}", status_code=503)
         return StreamingResponse(
             _mjpeg_parts(frame_tap),
             media_type=f"multipart/x-mixed-replace; boundary={MJPEG_BOUNDARY}",
@@ -298,12 +323,9 @@ def create_app(
                 "camera snapshot unavailable: no frame has arrived from the capture loop yet",
                 status_code=503,
             )
-        data = frame_tap.encode_frame(current[0])
-        if not data:
-            return PlainTextResponse(
-                "camera snapshot unavailable: no JPEG encoder is bound to the frame tap",
-                status_code=503,
-            )
+        data, reason = encode_or_reason(frame_tap, current[0])
+        if reason is not None:
+            return PlainTextResponse(f"camera snapshot unavailable: {reason}", status_code=503)
         return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
     @app.websocket("/ws")
