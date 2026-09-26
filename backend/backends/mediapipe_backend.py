@@ -26,6 +26,46 @@ FACE_LANDMARKER_TASK_URL = (
 )
 DEFAULT_MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "face_landmarker.task"
 
+# Attribute paths under the mediapipe module that expose BaseOptions, in
+# preference order: the canonical tasks.python location, its tasks-level
+# re-export (mediapipe 1.x aliases tasks -> tasks.python), then the legacy
+# tasks.vision re-export (mediapipe 0.10.x).
+_BASE_OPTIONS_CANDIDATE_PATHS: tuple[tuple[str, ...], ...] = (
+    ("tasks", "python", "BaseOptions"),
+    ("tasks", "BaseOptions"),
+    ("tasks", "vision", "BaseOptions"),
+)
+
+
+def resolve_base_options(mp_module: Any) -> Any:
+    """Resolve the ``BaseOptions`` class from a mediapipe module object.
+
+    Pure and side-effect free (no real mediapipe import at module scope) so it
+    is unit-testable with stub namespaces. Mediapipe 1.0 removed the legacy
+    ``mediapipe.tasks.vision.BaseOptions`` re-export and aliased
+    ``mediapipe.tasks`` to ``mediapipe.tasks.python``, so the symbol is looked
+    up by capability across known layouts instead of by version number.
+
+    Raises AttributeError naming the version and every location tried if none
+    of the candidates resolve.
+    """
+    tried: list[str] = []
+    for path in _BASE_OPTIONS_CANDIDATE_PATHS:
+        obj: Any = mp_module
+        for attr in path:
+            obj = getattr(obj, attr, None)
+            if obj is None:
+                break
+        if obj is not None:
+            return obj
+        tried.append("mediapipe." + ".".join(path))
+    version = getattr(mp_module, "__version__", "unknown")
+    raise AttributeError(
+        f"mediapipe {version} does not expose BaseOptions at any known location "
+        f"(tried: {', '.join(tried)}). Check that the installed mediapipe is "
+        "compatible with backend/requirements.txt."
+    )
+
 
 def _matrix_to_euler_degrees(matrix: Any) -> dict[str, float]:
     """Extract rotation (rx, ry, rz) in degrees from a 4x4 transform matrix."""
@@ -98,7 +138,7 @@ class MediaPipeBackend(CaptureBackend):
         FaceLandmarker = mp.tasks.vision.FaceLandmarker
         FaceLandmarkerOptions = mp.tasks.vision.FaceLandmarkerOptions
         VisionRunningMode = mp.tasks.vision.RunningMode
-        BaseOptions = mp.tasks.vision.BaseOptions
+        BaseOptions = resolve_base_options(mp)
 
         options = FaceLandmarkerOptions(
             base_options=BaseOptions(model_asset_path=str(model_path)),

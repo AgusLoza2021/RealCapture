@@ -9,3 +9,6 @@ __pycache__/
 soak_output/
 soak_output.log
 realcapture_rig_profile.json
+
+# Runtime-downloaded inference model (see backend/backends/mediapipe_backend.py)
+backend/models/

@@ -1,4 +1,6 @@
-mediapipe>=0.10.9
+# Capped at <1.1: mediapipe 1.0 removed the tasks.vision.BaseOptions re-export
+# (resolved by capability in backend/backends/mediapipe_backend.py).
+mediapipe>=0.10.9,<1.1
 opencv-python>=4.8.0
 fastapi>=0.110
 uvicorn>=0.29
