@@ -42,6 +42,10 @@ class CaptureConsumer:
         self._timer_registered = False
         self.stats = CaptureStats()
         self._last_values: dict[str, float] = {}
+        # Last seen values of the receiver's cumulative counters, so deltas
+        # feed the stats without double counting across ticks.
+        self._last_invalid_seen = 0
+        self._last_stale_seen = 0
         # Optional FacePointRig (set by the rig-connector bind operator).
         self.face_points = None
 
@@ -76,6 +80,10 @@ class CaptureConsumer:
     def _begin(self) -> None:
         self._last_values.clear()
         self.stats.reset()
+        self._last_invalid_seen = 0
+        self._last_stale_seen = 0
+        if self._receiver is not None:
+            self._receiver.reset_counters()
         bpy.app.timers.register(self._tick, first_interval=0.0)
         self._timer_registered = True
 
@@ -113,6 +121,16 @@ class CaptureConsumer:
             self.stats.record_idle_poll()
         else:
             self._apply(packet)
+        # Feed the receiver's cumulative counters into the stats as deltas so
+        # nothing is double counted across ticks.
+        invalid_total = self._receiver.invalid_count
+        if invalid_total > self._last_invalid_seen:
+            self.stats.record_invalid(invalid_total - self._last_invalid_seen)
+        self._last_invalid_seen = invalid_total
+        stale_total = self._receiver.stale_dropped
+        if stale_total > self._last_stale_seen:
+            self.stats.record_stale_dropped(stale_total - self._last_stale_seen)
+        self._last_stale_seen = stale_total
         return POLL_INTERVAL_S
 
     # -- application to the controller ----------------------------------------

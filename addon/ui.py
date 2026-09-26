@@ -141,6 +141,8 @@ class RC_PT_main_panel(bpy.types.Panel):
         box.label(text=f"Transport: avg {stats.avg_transport_ms:.1f} ms / max {stats.max_transport_ms:.1f} ms")
         if stats.invalid_packets:
             box.label(text=f"Invalid packets: {stats.invalid_packets}", icon="ERROR")
+        if stats.packets_dropped_stale:
+            box.label(text=f"Stale drops: {stats.packets_dropped_stale}", icon="ERROR")
 
         col = layout.column(align=True)
         col.prop(settings, "record_session")

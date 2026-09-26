@@ -165,3 +165,52 @@ def test_session_max_resets_with_the_session():
     assert stats.session_max_transport_ms == 0.0
     assert stats.max_transport_ms == 0.0
     assert stats.avg_transport_ms == 0.0
+
+
+def test_record_invalid_default_count_is_one():
+    """record_invalid() keeps its zero-argument call shape, with count as an
+    optional delta for consumers feeding cumulative counters."""
+    stats = CaptureStats()
+    stats.record_invalid()
+    assert stats.invalid_packets == 1
+    stats.record_invalid(3)
+    assert stats.invalid_packets == 4
+    stats.reset()
+    assert stats.invalid_packets == 0
+
+
+def test_record_stale_dropped_counts_and_resets():
+    """record_stale_dropped accumulates dropped-stale packets and reset clears it."""
+    stats = CaptureStats()
+    stats.record_stale_dropped()
+    stats.record_stale_dropped(4)
+    assert stats.packets_dropped_stale == 5
+    stats.reset()
+    assert stats.packets_dropped_stale == 0
+
+
+def test_session_max_gap_tracks_spike_beyond_the_window():
+    """Property: session_max_gap_ms keeps the largest gap between two
+    consecutive applied packets on the monotonic clock, outside the rolling
+    window: a full STATS_WINDOW of quiet samples must not erase the spike."""
+    stats = CaptureStats()
+    base = 1_000_000.0
+    # Two applied packets 1500 monotonic ms apart, then a full window of
+    # quiet 10 ms samples so the deque rolls past the spike entirely.
+    stats.record_applied(make_packet(t=1), base, 1.0)
+    stats.record_applied(make_packet(t=2), base + 1500.0, 2.0)
+    for i in range(STATS_WINDOW):
+        stats.record_applied(make_packet(t=3), base + 1500.0 + (i + 1) * 10.0, 3.0)
+    assert stats.session_max_gap_ms == pytest.approx(1500.0)
+
+
+def test_session_max_gap_ignores_first_packet_and_resets():
+    """The first applied packet has no predecessor: no gap is recorded."""
+    stats = CaptureStats()
+    base = 2_000_000.0
+    stats.record_applied(make_packet(t=1), base, 1.0)
+    assert stats.session_max_gap_ms == 0.0
+    stats.record_applied(make_packet(t=2), base + 20.0, 2.0)
+    assert stats.session_max_gap_ms == pytest.approx(20.0)
+    stats.reset()
+    assert stats.session_max_gap_ms == 0.0

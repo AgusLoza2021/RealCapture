@@ -31,6 +31,9 @@ def passing_report() -> dict:
         "session_max_transport_ms": 18.0,
         "invalid_packets": 0,
         "session_lines": applied,
+        "session_max_gap_ms": 33.0,
+        "stale_dropped": 0,
+        "idle_polls": 0,
         "tick_p95_ms": 1.5,
         "engine": "soak",
     }
@@ -174,4 +177,51 @@ def test_positive_control_skipped_when_floor_absent():
     """Without an expected floor (plain run), no positive-control check runs."""
     report = passing_report()
     report["transport_avg_ms"] = 0.5  # low but alive
+    assert evaluate_soak_gates(report) == []
+
+
+def test_missing_session_max_gap_ms_fails():
+    """Property (session coverage): a report without session_max_gap_ms cannot
+    prove the whole session's inter-apply gaps were measured and must fail."""
+    report = passing_report()
+    del report["session_max_gap_ms"]
+    failures = evaluate_soak_gates(report)
+    assert failures, "an unmeasured session-wide apply gap must not pass"
+    assert any("session_max_gap_ms" in f and "unmeasured" in f for f in failures), failures
+
+
+def test_session_max_gap_over_500_fails():
+    """Property (stall gate): a session-wide apply gap over 500 ms (15 missed
+    frames at 30 Hz) fails even when the average fps floor passes."""
+    report = passing_report()
+    report["session_max_gap_ms"] = 2359.0
+    failures = evaluate_soak_gates(report)
+    assert failures, "a 37-second-style stall must not pass the gate"
+    assert any("2359.0" in f and "500" in f for f in failures), failures
+
+
+def test_session_max_gap_at_500_exactly_passes():
+    """Boundary: 500.0 ms is at the limit, not over it."""
+    report = passing_report()
+    report["session_max_gap_ms"] = 500.0
+    assert evaluate_soak_gates(report) == []
+
+
+def test_stale_drop_ratio_over_threshold_fails():
+    """Property (throttle-vs-loss): a stale-drop ratio above 0.01 fails and
+    names both the ratio and the raw count."""
+    report = passing_report()
+    report["stale_dropped"] = 1025
+    failures = evaluate_soak_gates(report)
+    ratio = 1025 / (1025 + report["packets_applied"])
+    assert failures, "1,025 stale drops over ~54,000 applied must not pass"
+    assert any(f"{ratio:.4f}" in f and "1025" in f for f in failures), failures
+
+
+def test_stale_drop_ratio_at_threshold_passes():
+    """Boundary: a stale-drop ratio of exactly 0.01 is at the limit, not over."""
+    report = passing_report()
+    report["packets_applied"] = 45540  # 99 * 460, still above the 25 fps floor
+    report["session_lines"] = 45540
+    report["stale_dropped"] = 460  # 460 / 46000 == 0.01 exactly
     assert evaluate_soak_gates(report) == []

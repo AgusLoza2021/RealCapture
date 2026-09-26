@@ -13,6 +13,11 @@ always passed:
   fast one;
 - session coverage: the session-wide maximum is gated, so a spike outside the
   rolling window cannot hide;
+- stall coverage: the session-wide apply gap is gated (missing field fails as
+  unmeasured; over 500 ms fails), so a stall that the average fps floor hides
+  cannot pass;
+- throttle vs loss: the stale-drop ratio is gated, since stale discards are
+  frames lost to queue pressure, not to a slow consumer;
 - positive control: when the report carries an ``expected_latency_floor_ms``
   (injected stamp skew), an average below 80% of that floor proves the
   measurement did not respond to the injection.
@@ -55,6 +60,32 @@ def evaluate_soak_gates(report: dict) -> list[str]:
         session_max = report["session_max_transport_ms"]
         if session_max > 100:
             failures.append(f"session transport max {session_max:.1f} ms > 100 ms")
+
+    # Hole 2b: session-wide stall coverage. A report without the field cannot
+    # prove the whole session's inter-apply gaps were measured, so it must
+    # fail. 500 ms is 15 missed frames at 30 Hz: a stall the average fps
+    # floor is computed over the whole run cannot see.
+    if "session_max_gap_ms" not in report:
+        failures.append(
+            "soak report lacks session_max_gap_ms; session-wide apply gap is unmeasured"
+        )
+    else:
+        gap = report["session_max_gap_ms"]
+        if gap > 500:
+            failures.append(
+                f"session-wide apply gap {gap:.1f} ms > 500 ms "
+                "(15 missed frames at 30 Hz)"
+            )
+
+    # Throttle vs loss: stale discards are real frame loss from queue
+    # pressure. The ratio gate keeps it under 1% of drained traffic.
+    stale = report.get("stale_dropped", 0)
+    drained = stale + report.get("packets_applied", 0)
+    stale_ratio = stale / drained if drained else 0.0
+    if stale_ratio > 0.01:
+        failures.append(
+            f"stale drop ratio {stale_ratio:.4f} ({stale} stale drops) > 0.01"
+        )
 
     # Hole 1: liveness. A measurement that reports exactly zero (or negative)
     # on its aggregates is dead, not fast. A single zero sample does not trip

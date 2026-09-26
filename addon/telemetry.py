@@ -8,6 +8,11 @@ Two clocks, two purposes:
   monotonic ms always goes negative and clamps to exactly 0.0.
 Replay passes the packet's own stamp as the applied epoch time so replayed
 packets report zero latency by intent, not because of a clock mismatch.
+
+Session-wide coverage: ``session_max_transport_ms`` and
+``session_max_gap_ms`` keep their maxima over EVERY sample, deliberately
+outside the rolling 120-sample window, so a stall or latency spike cannot
+hide behind the window rolling past it.
 """
 
 from __future__ import annotations
@@ -28,10 +33,12 @@ class CaptureStats:
     packets_applied: int = 0
     invalid_packets: int = 0
     packets_dropped_idle: int = 0  # polls that found no new packet
+    packets_dropped_stale: int = 0  # queued datagrams replaced by a newer one
     applied_fps: float = 0.0
     avg_transport_ms: float = 0.0
     max_transport_ms: float = 0.0
     session_max_transport_ms: float = 0.0  # max over EVERY sample, not just the window
+    session_max_gap_ms: float = 0.0  # max gap between consecutive applied packets, not just the window
     engine: str = ""
     _latency_window: deque = field(default_factory=lambda: deque(maxlen=STATS_WINDOW), repr=False)
     _applied_times: deque = field(default_factory=lambda: deque(maxlen=STATS_WINDOW), repr=False)
@@ -55,14 +62,25 @@ class CaptureStats:
         if transport_ms > self.session_max_transport_ms:
             self.session_max_transport_ms = transport_ms
 
+        # Session-wide gap between consecutive applied packets, computed from
+        # the previous sample BEFORE the deque append, so the window's maxlen
+        # can never affect it (same coverage as session_max_transport_ms).
+        if self._applied_times:
+            gap_ms = applied_monotonic_ms - self._applied_times[-1]
+            if gap_ms > self.session_max_gap_ms:
+                self.session_max_gap_ms = gap_ms
+
         self.packets_applied += 1
         self.engine = packet.engine
         self._latency_window.append(transport_ms)
         self._applied_times.append(applied_monotonic_ms)
         self._recompute()
 
-    def record_invalid(self) -> None:
-        self.invalid_packets += 1
+    def record_invalid(self, count: int = 1) -> None:
+        self.invalid_packets += count
+
+    def record_stale_dropped(self, count: int = 1) -> None:
+        self.packets_dropped_stale += count
 
     def record_idle_poll(self) -> None:
         self.packets_dropped_idle += 1
@@ -80,10 +98,12 @@ class CaptureStats:
         self.packets_applied = 0
         self.invalid_packets = 0
         self.packets_dropped_idle = 0
+        self.packets_dropped_stale = 0
         self.applied_fps = 0.0
         self.avg_transport_ms = 0.0
         self.max_transport_ms = 0.0
         self.session_max_transport_ms = 0.0
+        self.session_max_gap_ms = 0.0
         self.engine = ""
         self._latency_window.clear()
         self._applied_times.clear()

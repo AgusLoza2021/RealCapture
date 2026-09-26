@@ -93,3 +93,61 @@ def test_only_invalid_packets_returns_none(receiver):
 def test_invalid_port_rejected():
     with pytest.raises(ValueError):
         UdpReceiver(host="127.0.0.1", port=70000)
+
+
+def test_stale_discards_counted_per_drain(receiver):
+    """Every drained datagram replaced by a newer one is a stale discard."""
+    _send_to(receiver, [make_packet(100, 0.1), make_packet(200, 0.2), make_packet(300, 0.3)])
+    packet = receiver.poll_latest()
+    assert packet is not None and packet.t == 300
+    # Three drained, only the newest kept: two stale discards.
+    assert receiver.stale_dropped == 2
+    # An empty poll after the drain must not increment the counter.
+    assert receiver.poll_latest() is None
+    assert receiver.stale_dropped == 2
+
+
+def test_single_datagram_poll_discards_nothing(receiver):
+    """A poll that drains exactly one datagram discards nothing."""
+    _send_to(receiver, [make_packet(100)])
+    packet = receiver.poll_latest()
+    assert packet is not None
+    assert receiver.stale_dropped == 0
+
+
+def test_empty_poll_does_not_increment_stale_dropped(receiver):
+    """A poll that receives nothing must not increment the counter."""
+    assert receiver.poll_latest() is None
+    assert receiver.stale_dropped == 0
+
+
+def test_stale_counter_is_cumulative_across_polls(receiver):
+    """The counter accumulates over the receiver's lifetime."""
+    _send_to(receiver, [make_packet(100), make_packet(200)])
+    assert receiver.poll_latest() is not None
+    assert receiver.stale_dropped == 1
+    _send_to(receiver, [make_packet(300), make_packet(400), make_packet(500)])
+    assert receiver.poll_latest() is not None
+    assert receiver.stale_dropped == 3
+
+
+def test_stale_invalid_newest_is_invalid_not_stale(receiver):
+    """The newest datagram is decoded (invalid if bad); only the older drained
+    datagrams are stale discards."""
+    _send_to(receiver, [make_packet(100), b"{not json"])
+    assert receiver.poll_latest() is None
+    assert receiver.invalid_count == 1
+    assert receiver.stale_dropped == 1
+
+
+def test_reset_counters_zeroes_both_cumulative_counters(receiver):
+    """reset_counters() clears stale_dropped and invalid_count together."""
+    _send_to(receiver, [make_packet(100), make_packet(200)])
+    assert receiver.poll_latest() is not None
+    _send_to(receiver, [b"{not json"])
+    assert receiver.poll_latest() is None
+    assert receiver.stale_dropped == 1
+    assert receiver.invalid_count == 1
+    receiver.reset_counters()
+    assert receiver.stale_dropped == 0
+    assert receiver.invalid_count == 0

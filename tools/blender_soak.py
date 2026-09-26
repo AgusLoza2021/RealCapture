@@ -97,6 +97,8 @@ def main() -> int:
                   f"applied={stats.packets_applied} fps={stats.applied_fps:.1f} "
                   f"transport avg={stats.avg_transport_ms:.1f}ms "
                   f"max={stats.max_transport_ms:.1f}ms "
+                  f"dropped={stats.packets_dropped_stale} "
+                  f"gap_max={stats.session_max_gap_ms:.1f}ms "
                   f"invalid={stats.invalid_packets}", flush=True)
             next_report += 60.0
 
@@ -108,6 +110,7 @@ def main() -> int:
     applied = stats.packets_applied - applied_at_start
     session_lines = sum(1 for _ in open(session_path, encoding="utf-8"))
     controller = bpy.data.objects["RealCapture_Controller"]
+    stale_dropped = stats.packets_dropped_stale
     report = {
         "minutes": SOAK_MINUTES,
         "port": PORT,
@@ -118,7 +121,14 @@ def main() -> int:
         "transport_avg_ms": stats.avg_transport_ms,
         "transport_max_ms": stats.max_transport_ms,
         "session_max_transport_ms": stats.session_max_transport_ms,
+        "session_max_gap_ms": stats.session_max_gap_ms,
         "invalid_packets": stats.invalid_packets,
+        "stale_dropped": stale_dropped,
+        "stale_drop_ratio": (
+            stale_dropped / (stale_dropped + applied)
+            if (stale_dropped + applied) else 0.0
+        ),
+        "idle_polls": stats.packets_dropped_idle,
         "tick_p95_ms": p95 * 1000.0,
         "session_lines": session_lines,
         "rc_shape_jawOpen": controller.get("rc_shape_jawOpen"),
