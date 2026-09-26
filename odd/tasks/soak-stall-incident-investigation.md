@@ -1,6 +1,10 @@
 # Feature: Soak stall incident — what happened in the 30-minute run
 
-Status: **open defect, reported 2026-09-25. Cause NOT established.** One incident in one run.
+Status: **open defect, reported 2026-09-25. Cause NOT established, but the classification IS.**
+Forensic re-analysis of the preserved artifacts was run 2026-09-26 (independent, read-only) and
+narrowed the phenomenon to a host-or-process freeze; it also **corrected one of this document's own
+counts** and designed the one experiment that separates the two remaining hypotheses. See "Forensic
+classification" below. One incident in one run.
 Needs a reproduction run and a discriminating run. Nothing committed.
 
 **Naming note:** the cause is *not* known to be transport. The link is UDP over loopback with no
@@ -153,19 +157,103 @@ cause. The stall coincides with the Blender apply path and with host scheduling.
 2. **The 25 fps floor is a whole-run average.** Minute 2 ran at 12.3 fps and passed.
 3. The positive control is still opt-in; see `odd/tasks/m1-latency-gate-hardening.md`.
 
+## Forensic classification (2026-09-26, independent read-only re-analysis)
+
+Every aggregate below was rebuilt from the preserved JSONL by hand and the method was validated by
+reproducing this document's own cluster-2 numbers exactly (5 samples, 56/69/69/94/67 ms). Doc index =
+JSONL line − 2 (line 1 is the header).
+
+**Signature classification, which is the real advance.** Per recorded line: `G_r` = `recv_t` gap,
+`G_t` = `packet.t` gap, `L` = `recv_t − packet.t`.
+
+- **(c) receiver stall** (`G_r ≫ G_t`, `L ≳ 0.8·G_r`) — **dominant.** Pure: 1157/246/1155,
+  1988/137/1865, 1329/139/1201, **2449/104/2359 (the peak)**, 435/46/402, 618/15/616, 734/22/712 ms.
+  c-dominant or mixed: 3191/1156/2036 and four more. ≈12 of the 31 elevated samples.
+- **(b) sender silence / arrival hole** (`G_t ≈ G_r` large, `L` small) — **real but secondary.** Pure:
+  745/731/0, 398/397/1, 1947/1923/27 ms; plus burst-and-hole samples. ≈10 samples.
+- **(a) strict backlog drain** (`L ≥ G_r`) — **zero confirmed.** All 30 stale applies have `L < G_r`,
+  so in no sample did the applied frame arrive before the previous apply. The ~2.5 s apparent "stamp
+gaps" are sender-side holes followed by catch-up bursts (`G_t > G_r`), **not** a queue holding 2.5 s of
+stamps. This confirms and generalises the document's original separation of the two signatures: the
+backlog drain is still not a stall.
+- Mixed samples exist where `G_t` **and** `G_r` are both large (1830/1873, 2468/1089, 3191/1156) —
+  sender and receiver froze *together*. That is the strongest single clue and it points away from our
+  receive loop.
+
+**`packet.t` is not a 33.3 ms grid.** `t` is `int(time.time()*1000)` stamped at send time, so the
+observed diffs are real: 12, 18, 21, 25, 29, 34, 41, 54, 78 ms in healthy regions. The *intended*
+schedule is a grid; the stamps are not. A harness artefact is also confirmed: `phase` derives from
+`time.monotonic()`, quantised to **1/64 s = 15.625 ms** on this host, and is sampled *before* the
+sleep, so payload values repeat and lag real time by up to ~47 ms. This does not affect `t`-based
+latency, but it does degrade soak payload realism.
+
+**No periodicity.** Cluster onsets 80.4 s → 167.5 s → 1325.8 s give intervals of 87.1 s and 1158.3 s:
+no 60 s or 300 s period. Sub-episodes inside the main incident recur at ~2–2.7 s, which is close to
+the recorder flush cadence (60 packets ≈ 2 s) — a candidate coupling, explicitly **not** a proof.
+
+**The peak tick cannot be an apply-cost spike.** `recv_t` is stamped *before* `face_points.apply()`
+(`addon/consumer.py:157` vs `:160`). At the peak tick, JSONL `L` = 2359 ms while the post-apply
+`session_max_transport_ms` is 2359.795 ms, i.e. property writes + record + flush + apply cost roughly
+**≤ 2 ms** on that tick. The 2.36 s elapsed *before* `recv_t`.
+
+**The recorder-flush hypothesis is refuted as the dominant cause.** Minute 1 applies ~1800 packets
+(~30 flushes) with a maximum of ≤ 22 ms; the incident window has ≤ 2 flushes but ~30 sub-episodes;
+the applied-packet-2400 flush lands at t ≈ 80.0 s in **both** runs and is benign in the clean pre-fix
+run (`L` = 11 ms). Recording was enabled in both runs. Same for a fixed kernel socket buffer: the
+capacity implied by `L = G_r − C·33 ms` varies from 0.06 to 35 frames, so no single buffer explains
+it, and a pure burst cannot produce `L ≈ 2.4 s` (that would require `L ≥ G_r`, never observed).
+Clock mis-attribution is excluded too: latency returns to a 0–30 ms baseline after every cluster and
+there is no step in the offset.
+
+**Correction to this document — cluster 3.** The timeline above says 9 samples of 51–82 ms. On
+exhaustive re-read, cluster 3 contains **4 samples in [52, 67] ms** (62, 67, 55, 52) **plus one
+159 ms** sample whose signature is cleanly (c) (`G_r` 183, `G_t` 48). The original count of 9 is not
+reproducible from the preserved file. Two few-hundred-millisecond windows inside that range were not
+read exhaustively, so 4 + 1 is a floor, not necessarily the exact total — but the "9 samples 51–82 ms"
+figure must not be quoted. **The headline totals are unaffected**: 47 × >50 ms, 24 × >100 ms, 8 × >1 s,
+3 × >2 s, and 1,025 of the 1,137 missing frames (90 %) still fall inside the main incident.
+
+**Ranked hypotheses after the analysis.** (1) Host-wide multi-second deschedule — CPU starvation,
+paging, EcoQoS throttling, AV scan: supported by the simultaneous `G_t`/`G_r` freeze, by the stall
+reproducing on an idle host in 2 minutes, and by host state being the only difference from the clean
+pre-fix run. (2) A Blender-process-only stall: supported by (c) dominating with `t` still advancing,
+but it cannot explain genuine sender silence. (3) Sender-side scheduling and harness defect:
+explains every `t`-hole and burst, cannot create a 2449 ms receiver gap alone. (4) Recorder flush /
+AV scan of the 24 MB JSONL: **refuted as dominant**, a rare AV freeze not fully excluded.
+
+**The one decisive experiment (designed, NOT run).** Run the same UDP workload into a **plain-Python
+receiver** alongside an **external host-freeze probe**, same host, same 30-minute window. If the
+plain-Python receiver also logs >100 ms gaps coincident with freezer lines, it is host-wide; if it
+stays under 50 ms while Blender stalls in the same window, it is Blender-specific, and only then does
+an in-Blender record-on/record-off A/B plus an in-process liveness thread make sense. This was
+deliberately not run during the analysis, because a concurrent Blender workload would have made the
+latency evidence invalid.
+
+**Additional code defects found by the analysis** (beyond the dead invalid counter and the two blind
+spots already recorded): `addon/receiver.py:32-37` never sets `SO_RCVBUF`, so the receive buffer is
+the Windows default; `addon/receiver.py:53-58` catches only `BlockingIOError` in the drain loop, so a
+`ConnectionResetError`/`OSError` on Windows would escape into the soak handler; `DEFAULT_MAX_DRAIN =
+64` silently caps how much backlog one poll may clear; `addon/session.py:62` calls `flush()` with **no
+`fsync` anywhere in the repository**; the soak report stores `tick_p95_ms` but **no tick max**, so the
+per-tick apply-cost distribution is not recoverable from any preserved artifact; and
+`tools/blender_soak.py:79-87` pumps at a measured ~57.5 Hz with a `behind` value that is computed and
+never used, so there is no catch-up.
+
 ## Tasks
 
 | id | Task | Depends on |
 |---|---|---|
 | T1 | **Reproduce or refute. DONE, and the reproduction is cheap.** A 2-minute verification run on 2026-09-25 hit a ~300 ms in-tick stall at t+90 s: `session_max_gap_ms` 312.0, `session_max_transport_ms` 328.6, 9 stale discards, 0 errors. The stall class therefore reproduces in 2 minutes, not 30, and there is now a cheap loop. **Still open:** its frequency across N runs. | none |
-| T2 | **Discriminate the I/O hypothesis.** One 30-minute run with `settings.record_session = False`, one with it enabled, same host and load. If the incident tracks recording, it is our loop. | T1 |
+| T2 | **Narrowed 2026-09-26, superseded by T9.** One 30-minute run with `settings.record_session = False`, one with it enabled, same host and load. The forensic re-analysis already refutes the recorder flush as the **dominant** cause (minute 1 = ~30 flushes at ≤ 22 ms; the incident window has ≤ 2 flushes but ~30 sub-episodes; the coincident flush is benign in the clean run), so this A/B is now a confirmation step inside T9 rather than the discriminator. | T1 |
 | T3 | **DONE 2026-09-25.** `UdpReceiver.stale_dropped` + `reset_counters()`; `CaptureStats.packets_dropped_stale` and `record_stale_dropped()`; `record_invalid(count=1)` now actually called by the consumer via tracked deltas; report keys `stale_dropped`, `stale_drop_ratio`, `idle_polls`, `session_max_gap_ms`; UI row. 173 tests pass (baseline 158). | none |
 | T4 | **DONE 2026-09-25.** Gate fails on a missing `session_max_gap_ms` ("unmeasured"), on `session_max_gap_ms > 500`, and on `stale_drop_ratio > 0.01`. Independently verified: the preserved failed 30-minute run derives a 3,191 ms max gap and **fails**; the clean pre-fix run derives 338 ms and **passes**. No pre-existing check was tightened or removed. | T3 |
 | T5 | Decide from T1/T2: if it is our loop, move session writes off the receive path; if it is the host, record it as an environmental limit with the evidence and keep the gate. | T1, T2 |
 | T6 | Correct the M1 record: state whether the 30-minute exit criterion is met on evidence, with the incident frequency, and drop the now-uninformative "0 invalid" claims. | T5 |
 
-| T7 | **Calibrate the two new bounds.** The 500 ms gap bound has only ~1.6× headroom over healthy data (312 ms observed on a clean 2-minute run), and `stale_drop_ratio` is not run-length-normalized, so a short run fails on the same absolute jitter that a long run tolerates. Decide: raise the bound, aggregate over a window, or normalize by run length. | T3 |
+| T7 | **Calibrate the two new bounds.** The 500 ms gap bound has only ~1.6× headroom over healthy data (312 ms observed on a clean 2-minute run), and `stale_drop_ratio` is not run-length-normalized, so a short run fails on the same absolute jitter that a long run tolerates. Decide: raise the bound, aggregate over a window, or normalize by run length. **Intensified 2026-09-26: the forensic analysis found host-wide multi-second freezes are the leading explanation, which makes a fixed absolute 500 ms bound the wrong shape of gate for this host.** | T3 |
 | T8 | **Close the two remaining blind spots the verification found:** `session_max_gap_ms` cannot see a stall on the final applied packet, and `tick_p95_ms` is reported but not gated at all. | T4 |
+| T9 | **Run the one decisive experiment** designed by the 2026-09-26 forensic analysis: the same UDP workload into a plain-Python receiver plus an external host-freeze probe, same host and window. It separates a host-wide freeze from a Blender-process stall in a single run, and it must **not** be run concurrently with any Blender work or the evidence is invalid. | T1 |
+| T10 | **Fix the additional code defects the forensic analysis found:** no `SO_RCVBUF` (`addon/receiver.py:32-37`), the drain catches only `BlockingIOError` (`:53-58`), the silent `DEFAULT_MAX_DRAIN = 64` cap, `flush()` without `fsync` (`addon/session.py:62`), no tick-max in the soak report, the dead `behind` and ~57.5 Hz pump in `tools/blender_soak.py:79-87`, and the pre-sleep, 15.625 ms-quantised `phase` in `tools/soak_send.py`. | none |
 
 ## Non-goals
 
