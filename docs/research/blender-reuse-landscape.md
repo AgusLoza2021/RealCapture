@@ -99,6 +99,48 @@ is the same shape the owner asked for.
 deferred to M5: it is the **prerequisite for reuse**, and it also has to coexist with the project's
 existing runtime dependency on MPFB2 (GPLv3).
 
+### VERIFIED — what the addon's license is actually forced to be
+
+Asked and answered from the publishers themselves, not from blog posts:
+
+> "What about add-ons or my Python scripts? If you share or publish Python scripts **they have to be
+> made available licensed as GNU GPL** as well, if they use Blender Python API calls."
+> "Can I sell add-ons for Blender? Yes you can, **but only if you provide the add-on and the sources to
+> your clients under the GNU GPL license**."
+> — Blender FAQ, <https://www.blender.org/support/faq/> (read 2026, section "Using Blender")
+
+> "The Blender Extensions Platform only supports free and open source extensions compliant with
+> Blender's license: For add-ons, the required license is **GNU General Public License v3.0 or later**.
+> For assets used in add-ons, the required license is **Public Domain (CC0)**."
+> — Blender Manual, <https://docs.blender.org/manual/en/latest/advanced/extensions/licenses.html>
+
+Consequences, in order of how much they change the plan:
+
+1. **A published `addon/` must be GPL, and GPL-3.0-or-later if it goes on the Extensions Platform.**
+   This is not a preference we get to weigh; it is the condition on which bpy may be called. So the
+   earlier worry — "GPL-3.0 code forces the whole project to GPL" — is **moot and now backwards**: this
+   project is already committed to a GPL addon by its choice of platform, which makes GPL-3.0 the
+   *safest* third-party code to copy, not the most dangerous.
+2. **MIT code can be included in a GPLv3 work**, keeping the original notice. That is the whole point of
+   MIT's one-way compatibility, and it covers the VRM addon's mapping tables we were about to hand-write.
+3. **GPL-2.0-only code cannot be combined with GPLv3 code** (GPL-2.0-or-later can). Worth checking per
+   file before copying anything from the older addons; the blanket "GPL" label in the survey above is not
+   precise enough to rely on.
+4. **CC0 for assets is the platform's requirement**, which the `faceunits01` face-unit pack already meets.
+5. **Not forced:** `backend/`, the dashboard, the pure test suites, and any tool that talks to Blender
+   over a socket instead of calling the Python API. The rule above is scoped to scripts that *use the
+   Blender Python API*, so `tools/blender_*.py` (they run inside Blender and `import bpy`) are GPL,
+   while the capture backend that sends UDP to the addon is not. A single license for the whole repo is
+   still simpler to explain than a per-directory split, and it is what most addon repositories do.
+6. **MPFB2 is a runtime dependency, installed by the user into their own Blender** — depending on GPL
+   software does not relicense this project. Vendoring or redistributing MPFB2 would be a different
+   question, and nothing here does that.
+
+**Recommendation to the owner:** one `LICENSE` = **GPL-3.0-or-later** for the repository. It satisfies
+bpy, it is the only license the Extensions Platform accepts for add-ons, it makes the MIT tables legally
+reusable immediately, and it ends the per-file license archaeology. The cost, stated plainly: anyone who
+receives the addon may read and redistribute it, so a closed-source commercial addon is off the table.
+
 ## What this changes in the plan
 
 1. **Do not hand-author** an ARKit↔semantic table or a humanoid bone map. MIT tables exist.
@@ -113,5 +155,7 @@ existing runtime dependency on MPFB2 (GPLv3).
   `scaledteam/HEVA_Portal`, `VMC4B`, `weights_editor`, `VNyan-Weight-Studio`, `avatar-stage`.
 - Whether the VMC spec provides any receiver-status or back-channel.
 - Whether `VMC Link`'s manual bone mapping is scriptable rather than hand-only.
+- The exact SPDX variant of each "GPL" repository above (GPL-2.0-only vs -or-later vs -3.0) — the
+  distinction decides combinability, and only the license text per repository settles it.
 - Whether `VRM-Addon-for-Blender`'s mappers can be consumed as a library without importing the whole
   addon, or whether the tables should be vendored with attribution.
