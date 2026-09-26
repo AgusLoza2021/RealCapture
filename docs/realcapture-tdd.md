@@ -3,13 +3,13 @@
 Real-time facial expression capture for Blender: webcam input → expression data → rig mapping → live character animation, with recording and bake.
 
 **Status:** Draft v0.1 (M0)
-**Audience:** Public-facing design doc. Private methodology and the custom mapping solver are intentionally excluded (see §2 IP Boundary).
+**Audience:** Public-facing design doc for the open-source repository (GPL-3.0-or-later). See §2 for the licensing facts and the project's one stable seam.
 
 ---
 
 ## 1. Overview
 
-RealCapture drives a 3D character's facial rig inside Blender from a standard webcam in real time, eliminating per-expression keyframing. It is built as a **composition of proven open components plus a private mapping layer**:
+RealCapture drives a 3D character's facial rig inside Blender from a standard webcam in real time, eliminating per-expression keyframing. It is built as a **composition of proven open components plus a mapping layer**:
 
 ```
 ┌──────────────────────┐    ┌─────────────┐    ┌───────────────────────────┐
@@ -19,7 +19,7 @@ RealCapture drives a 3D character's facial rig inside Blender from a standard we
 │  OpenSeeFace         │    └─────────────┘    └────────────┬──────────────┘
 └──────────────────────┘                                    │
                                               ┌─────────────▼──────────────┐
-                                              │  Mapping layer (private)   │
+                                              │  Mapping layer             │
                                               │  calibration · solver ·    │
                                               │  rig profiles · correctives│
                                               └─────────────┬──────────────┘
@@ -30,16 +30,30 @@ RealCapture drives a 3D character's facial rig inside Blender from a standard we
 ### Design pillars
 1. **Capture is commodity; mapping is the product.** Capture engines are pluggable open-source backends. All differentiation lives in the mapping layer.
 2. **Blender-safe concurrency.** No threads touching `bpy`. All Blender writes happen on the main thread.
-3. **Local-first, open later.** Windows-first for the local phase; open-source release comes after production quality.
+3. **Local-first, open source.** Windows-first and local-first by design; the repository is public now, entirely under GPL-3.0-or-later.
 4. **Reviewable work units.** Every milestone ships in small, independently reviewable slices.
 
 ---
 
-## 2. IP Boundary
+## 2. Licensing & Openness
 
-- The capture backends (MediaPipe, OpenSeeFace) are used under their open licenses, unmodified where possible.
-- The **mapping layer** — calibration model, expression solver logic, rig-profile system, correctives strategy — is private methodology. Public documents describe its *interface*, never its internals.
-- The transport packet schema (§5) is public and stable: it is the seam between the open ecosystem and the private engine.
+RealCapture is fully open source under **GPL-3.0-or-later**: every file in this repository —
+including the mapping layer (`addon/rigprofile/`, `addon/binding.py`), the calibration model,
+the expression solver logic, the rig-profile system, and the correctives strategy — is
+published under the same license (see [`LICENSE`](../LICENSE)). There is no private
+methodology and no private half.
+
+Third-party components are used unmodified under their own licenses:
+
+- **MediaPipe Face Landmarker** — Apache-2.0. The `face_landmarker.task` model bundle is **not**
+  redistributed by this repository: the backend downloads it at first run from Google's own URL
+  into a gitignored `backend/models/`. Whatever terms cover that model are Google's, not this
+  repository's, and this project makes no claim about them.
+- **OpenSeeFace** — BSD-2-Clause; runs as an external process (keep the notice).
+
+The **transport packet schema (§5)** is a deliberately stable public seam: it is the versioned
+contract between the capture backends and any consumer, so new backends and new consumers can
+be written against it without touching each other.
 
 ## 3. Users & Target Platforms
 
@@ -108,9 +122,9 @@ These rules come from Blender's documented constraints and community-validated p
 | Viewport evaluation | scene-dependent, measured and reported |
 | **End-to-end target** | **≤ 60 ms**, hard alert above 100 ms |
 
-## 7. Mapping Layer (public interface only)
+## 7. Mapping Layer
 
-The mapping layer is RealCapture's core value. Its public interface:
+The mapping layer is RealCapture's core value. Its interface:
 
 - **Input**: backend-agnostic semantic channels (ARKit-52 or equivalent) + head pose.
 - **Output**: values for target rig controls (shape keys, bones, or controller properties).
@@ -134,8 +148,7 @@ The mapping layer is RealCapture's core value. Its public interface:
 |---|---|---|
 | MediaPipe Face Landmarker + models | Apache-2.0 | Redistribution permitted; keep notice |
 | OpenSeeFace | BSD-2-Clause | Keep notice; external process |
-| RealCapture open-side (Blender addon) | TBD (MIT vs GPL — decision before release) | Shapes which existing addon code may be referenced |
-| RealCapture mapping layer | Private (IP) | Not distributed with open-side code |
+| RealCapture (entire repository, incl. the mapping layer) | GPL-3.0-or-later | Calling the Blender Python API requires GPL; the Extensions Platform accepts only GPL-3.0-or-later add-ons. See [`LICENSE`](../LICENSE). |
 
 Excluded due to non-commercial licenses: DECA/EMOCA/EmoTalk, InsightFace pretrained models (incl. LivePortrait's bundled models).
 
@@ -151,7 +164,7 @@ VALORANT assets (Riot Games) are used **only** for private educational/technical
 | OpenSeeFace/MediaPipe environment conflicts in Blender's Python | Backends run as separate processes with own venv; Blender side stays dependency-light |
 | Rig probing UX too complex for generic autorigs | Start with presets for Rigify/FaceIt; probe only as advanced path |
 | ARKit-52 semantic drift between backends | Channel normalization layer + per-backend unit tests |
-| Scope creep before local-phase quality | Roadmap gate: no open-source work before M4 exit |
+| Scope creep before local-phase quality | Roadmap gates per milestone (see `docs/roadmap.md`) |
 
 ## 12. References
 

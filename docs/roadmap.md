@@ -125,13 +125,25 @@ Goal: production output, not just live preview.
 
 **Exit criteria:** recorded take → baked → exported FBX loads clean in a second tool (e.g., Maya).
 
-## M5 — Open-Source Preparation — `Open` (blocked until M4 exit)
-Goal: release the open side without exposing the private side.
-- [ ] Repository split: public addon + private capture/mapping binaries (transport schema is the seam)
-- [ ] License decision (MIT vs GPL) + third-party notice file (Apache-2.0, BSD-2)
+## M5 — Open-Source Preparation — `In progress` (overtaken by an early publication — see note)
+Goal: run RealCapture as a public, fully open-source project.
+- [x] Repository public — published 2026-09-26 at github.com/AgusLoza2021/RealCapture, ahead of this milestone's other items and of M4 exit; the whole tree is public, including `addon/rigprofile/` and `addon/binding.py` (the planned public/private split did not happen and is no longer planned)
+- [x] License declared: GPL-3.0-or-later — `README.md` and `LICENSE`; calling the Blender Python API requires GPL, and the Extensions Platform accepts only GPL-3.0-or-later for add-ons
+- [ ] Third-party notice file (Apache-2.0 for MediaPipe, BSD-2 for OpenSeeFace)
+- [ ] Blender Extensions packaging: `blender_manifest.toml` + Extensions Platform listing
+- [ ] Contribution guide
 - [ ] OSC/VMC transport option for VTuber ecosystem interop
 - [ ] Original/permissively-licensed demo assets (VALORANT assets excluded)
 - [ ] Public docs: install, quickstart, rig-profile guide
 - [ ] README/demo media pass
 
-**Exit criteria:** clean-room review: no private methodology in public tree; a stranger can install and run.
+**Exit criteria:** a stranger can install and run; packaging meets the Extensions Platform's requirements.
+
+> **Reconciled 2026-09-26 — the repository was published ahead of this milestone.**
+> RealCapture went public today under GPL-3.0-or-later while M5 was still marked
+> `Open (blocked until M4 exit)`; that block and the "private side" framing are overtaken by
+> the publication decision. Only what is verified is ticked above (repository public, license
+> declared); what genuinely remains open is left unchecked: Blender Extensions packaging
+> (`blender_manifest.toml`), the third-party notice file, and the contribution guide. Nothing
+> else in this roadmap's decisions or recorded evidence is altered by the publication; the
+> locked-decisions line above remains the historical record of what was decided at M0.
