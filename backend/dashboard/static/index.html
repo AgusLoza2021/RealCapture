@@ -43,11 +43,61 @@
   .lamp.live { background: var(--signal); }
   .lamp.rec { background: var(--tungsten); }
   #status-word { color: var(--dim); font-size: 0.9rem; }
-  main { display: grid; gap: 1rem; padding-top: 1rem; }
+  #transport {
+    margin-left: auto; align-self: center;
+    font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--graphite);
+    background: var(--tungsten); border-radius: 4px; padding: 0.15rem 0.5rem;
+  }
+  main {
+    display: grid; gap: 1rem; padding-top: 1rem;
+    grid-template-areas: "camera" "telemetry" "connections" "channels";
+  }
   @media (min-width: 44rem) {
-    main { grid-template-columns: 3fr 2fr; align-items: start; }
+    main {
+      grid-template-columns: 3fr 2fr; align-items: start;
+      grid-template-areas:
+        "camera connections"
+        "telemetry channels";
+    }
   }
   section { min-width: 0; }
+  #camera-panel { grid-area: camera; }
+  #telemetry { grid-area: telemetry; }
+  #connections-panel { grid-area: connections; }
+  #channels-panel { grid-area: channels; }
+  h2 { font-size: 0.9rem; font-weight: 600; color: var(--dim); margin-bottom: 0.6rem; }
+
+  /* Camera panel: the preview is only trusted while the Camera light is green. */
+  .camera-frame {
+    position: relative; overflow: hidden;
+    background: #14161b;
+    border: 1px solid var(--panel-edge); border-radius: 8px;
+    min-height: 12rem;
+  }
+  .camera-frame img { display: block; width: 100%; height: auto; }
+  .camera-overlay {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 0.5rem;
+    text-align: center; padding: 1rem;
+    background: rgba(20, 22, 27, 0.93);
+  }
+  .camera-overlay[hidden] { display: none; }
+
+  /* State text is always printed, never colour-only. */
+  .state {
+    font-size: 0.75rem; font-weight: 700; letter-spacing: 0.08em;
+    color: var(--dim);
+  }
+  .state.green { color: var(--signal); }
+  .state.yellow { color: var(--tungsten); }
+  .state.red { color: var(--transport); }
+  .reason {
+    color: var(--dim); font-size: 0.85rem;
+    max-width: 30rem; overflow-wrap: anywhere;
+  }
+
   .readout {
     display: flex;
     align-items: baseline;
@@ -76,7 +126,30 @@
   button.stop.arm { background: var(--transport); color: var(--graphite); }
   button[disabled] { opacity: 0.45; cursor: default; }
   #record-path { color: var(--dim); font-size: 0.85rem; margin-top: 0.5rem; overflow-wrap: anywhere; }
-  h2 { font-size: 0.9rem; font-weight: 600; color: var(--dim); margin-bottom: 0.6rem; }
+
+  /* Connection list: one row per connection, state printed as text. */
+  .conn {
+    display: grid;
+    grid-template-columns: 0.8rem 1fr auto;
+    gap: 0.35rem 0.6rem; align-items: center;
+    padding: 0.55rem 0.7rem;
+    background: var(--panel);
+    border: 1px solid var(--panel-edge); border-radius: 6px;
+  }
+  .conn + .conn { margin-top: 0.45rem; }
+  .conn .dot {
+    width: 0.8rem; height: 0.8rem; border-radius: 50%;
+    background: var(--dim); flex: none;
+  }
+  .conn[data-state="green"] .dot { background: var(--signal); }
+  .conn[data-state="yellow"] .dot { background: var(--tungsten); }
+  .conn[data-state="red"] .dot { background: var(--transport); }
+  .conn[data-state="unknown"] .dot { background: transparent; border: 2px solid var(--dim); }
+  .conn .label { font-size: 0.9rem; overflow-wrap: anywhere; }
+  .conn .reason { grid-column: 1 / -1; max-width: none; font-size: 0.8rem; }
+  .conn[data-state="red"] .reason { color: #f0b3b3; }
+  .conn[data-state="yellow"] .reason { color: #ecd3a6; }
+
   .console { display: grid; gap: 0.3rem; }
   .row {
     display: grid;
@@ -102,6 +175,12 @@
     border-radius: 4px; padding: 0.1rem 0.35rem; font-size: 0.8rem;
     overflow-wrap: anywhere;
   }
+  #first-run { grid-area: camera; }
+  .steps { display: grid; gap: 0.7rem; margin-bottom: 1rem; }
+  .light-legend { display: grid; gap: 0.4rem; }
+  .light-legend div { display: flex; gap: 0.6rem; align-items: baseline; font-size: 0.85rem; }
+  .light-legend .state { flex: none; width: 5.5rem; }
+  .light-legend .meaning { color: var(--dim); }
   footer { margin-top: 1.5rem; color: var(--dim); font-size: 0.8rem; }
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
@@ -113,10 +192,40 @@
   <span class="lamp" id="lamp"></span>
   <h1>RealCapture</h1>
   <span id="status-word">connecting&hellip;</span>
+  <span id="transport" hidden>polling</span>
 </header>
 
 <main>
-  <section>
+  <section id="camera-panel" hidden>
+    <h2>Camera</h2>
+    <div class="camera-frame">
+      <img id="camera-img" alt="live camera preview" hidden />
+      <div class="camera-overlay" id="camera-overlay">
+        <span class="state" id="camera-state">WAITING</span>
+        <p class="reason" id="camera-reason">waiting for the first status snapshot&hellip;</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="first-run">
+    <h2>First run</h2>
+    <div class="steps">
+      <p class="empty">Nothing is connected yet. To see this dashboard live:</p>
+      <p class="empty">1. Start capture:<br /><code>python backend/run_capture.py --engine mediapipe --dashboard 8765</code></p>
+      <p class="empty">2. Open the demo scene in Blender with the RealCapture addon enabled, so the heartbeat starts.</p>
+      <p class="empty">3. Watch the three lights below: they only turn green when each link is actually alive.</p>
+    </div>
+    <div class="light-legend">
+      <div><span class="state green">GREEN</span><span class="meaning">Camera &mdash; a fresh camera frame is arriving from the capture loop.</span></div>
+      <div><span class="state green">GREEN</span><span class="meaning">Packets to Blender &mdash; capture packets are reaching Blender right now.</span></div>
+      <div><span class="state green">GREEN</span><span class="meaning">Blender rig &mdash; the addon heartbeat is fresh and the rig bind is healthy.</span></div>
+      <div><span class="state yellow">YELLOW</span><span class="meaning">still alive but aging; the reason text says what is slowing down.</span></div>
+      <div><span class="state red">RED</span><span class="meaning">that link is down or was never seen; the reason text says what is missing.</span></div>
+      <div><span class="state">UNKNOWN</span><span class="meaning">the dashboard was told nothing about this link &mdash; never assume it is fine.</span></div>
+    </div>
+  </section>
+
+  <section id="telemetry">
     <div class="readout">
       <span id="fps">&ndash;</span>
       <span class="unit">frames / s sent</span>
@@ -135,25 +244,44 @@
     <p id="record-path"></p>
   </section>
 
-  <section>
+  <section id="connections-panel" hidden>
+    <h2>Connections</h2>
+    <div id="connections"></div>
+  </section>
+
+  <section id="channels-panel">
     <h2>Channels</h2>
     <div class="console" id="console"></div>
     <p class="empty" id="console-empty">
-      No capture running. Start it with<br />
-      <code>python backend/run_capture.py --engine mediapipe --dashboard 8765</code>
+      No channel data yet. Channels appear here once capture is running and
+      sending packets.
     </p>
   </section>
 </main>
 
-<footer>Values arrive live over WebSocket. Green meters are healthy; amber means the channel is hot.</footer>
+<footer>
+  Values arrive live over WebSocket (falls back to polling).
+  The camera preview is only shown while the Camera light is green;
+  a frozen frame is never presented as live.
+</footer>
 
 <script>
 (function () {
   "use strict";
 
   var $ = function (id) { return document.getElementById(id); };
-  var state = null;
   var armTimer = null;
+
+  // The connection lights are defined by the server's status model; the UI
+  // only renders what the snapshot's `connections` array carries. This list
+  // is used ONLY to detect a missing row (which must render as UNKNOWN,
+  // never green) — labels, states and reason text always come from the
+  // snapshot itself.
+  var EXPECTED_IDS = ["camera", "packets", "blender"];
+
+  function isKnownState(s) {
+    return s === "green" || s === "yellow" || s === "red";
+  }
 
   function fmt(n, digits) {
     if (typeof n !== "number" || !isFinite(n)) return "\u2013";
@@ -182,8 +310,157 @@
     return level > 0.75 ? "hot" : "";
   }
 
+  // -- connection list ------------------------------------------------------
+
+  var connEls = {};
+
+  function renderConnections(snapshot) {
+    var list = Array.isArray(snapshot.connections) ? snapshot.connections : null;
+    var byId = {};
+    if (list) {
+      list.forEach(function (c) {
+        if (c && typeof c.id === "string") byId[c.id] = c;
+      });
+    }
+    var ids = EXPECTED_IDS.slice();
+    if (list) {
+      list.forEach(function (c) {
+        if (c && typeof c.id === "string" && ids.indexOf(c.id) === -1) ids.push(c.id);
+      });
+    }
+
+    $("connections-panel").hidden = false;
+    var host = $("connections");
+    ids.forEach(function (id) {
+      var c = byId[id] || null;
+      var el = connEls[id];
+      if (!el) {
+        el = document.createElement("div");
+        el.className = "conn";
+        el.innerHTML = '<span class="dot"></span><span class="label"></span>' +
+          '<span class="state"></span><p class="reason"></p>';
+        host.appendChild(el);
+        connEls[id] = el;
+      }
+      var key, word;
+      if (c && isKnownState(c.state)) {
+        key = c.state;
+        word = c.state.toUpperCase();
+      } else {
+        key = "unknown";
+        word = "UNKNOWN";
+      }
+      el.setAttribute("data-state", key);
+      el.querySelector(".label").textContent = (c && c.label) ? c.label : id;
+      el.querySelector(".state").textContent = word;
+
+      var reason = el.querySelector(".reason");
+      var text = "";
+      if (!c) {
+        text = "this connection is missing from the snapshot";
+      } else if (key === "unknown") {
+        text = "the snapshot carried an unknown connection state: " + String(c.state);
+      } else if (key !== "green") {
+        text = c.reason || "the snapshot carried no reason for this state";
+      } else {
+        text = c.reason || ""; // informational green reason, shown when present
+      }
+      if (text) {
+        reason.textContent = text;
+        reason.hidden = false;
+      } else {
+        reason.textContent = "";
+        reason.hidden = true;
+      }
+    });
+  }
+
+  // -- camera panel -----------------------------------------------------------
+
+  var cameraState = null;   // null = no snapshot yet, else green/yellow/red/unknown
+  var cameraReason = "";
+  var cameraRetrying = false;
+
+  function showOverlay(word, text) {
+    $("camera-overlay").hidden = false;
+    $("camera-state").textContent = word;
+    $("camera-state").className = "state " + (word === "WAITING" ? "" : word.toLowerCase());
+    $("camera-reason").textContent = text;
+  }
+
+  function startCameraStream() {
+    $("camera-img").src = "/camera.mjpg?ts=" + Date.now();
+  }
+
+  function updateCamera() {
+    var overlay = $("camera-overlay");
+    var img = $("camera-img");
+    if (cameraState === null) {
+      img.hidden = true;
+      img.removeAttribute("src");
+      showOverlay("WAITING", "waiting for the first status snapshot\u2026");
+      return;
+    }
+    if (cameraState === "green") {
+      if (cameraRetrying) return; // the reconnect note is already up
+      overlay.hidden = true;
+      img.hidden = false;
+      if (!img.getAttribute("src")) startCameraStream();
+      return;
+    }
+    img.hidden = true;
+    img.removeAttribute("src");
+    if (cameraState === "unknown") {
+      showOverlay("UNKNOWN", "the snapshot carried no camera connection");
+    } else {
+      showOverlay(
+        cameraState.toUpperCase(),
+        cameraReason || "the snapshot carried no reason for this state"
+      );
+    }
+  }
+
+  function renderCamera(snapshot) {
+    var list = Array.isArray(snapshot.connections) ? snapshot.connections : null;
+    var cam = null;
+    if (list) {
+      for (var i = 0; i < list.length; i++) {
+        if (list[i] && list[i].id === "camera") { cam = list[i]; break; }
+      }
+    }
+    cameraState = (cam && isKnownState(cam.state)) ? cam.state : "unknown";
+    cameraReason = cam ? (cam.reason || "") : "";
+    updateCamera();
+  }
+
+  $("camera-img").addEventListener("load", function () {
+    cameraRetrying = false;
+    if (cameraState === "green") $("camera-overlay").hidden = true;
+  });
+
+  $("camera-img").addEventListener("error", function () {
+    var img = $("camera-img");
+    img.removeAttribute("src");
+    img.hidden = true;
+    if (cameraState === "green") {
+      // The stream ends by design after ~5 s without a fresh frame, and the
+      // light is still green, so this is a hiccup: say so, then reconnect.
+      cameraRetrying = true;
+      showOverlay("GREEN", "the camera stream ended; reconnecting\u2026");
+      setTimeout(function () {
+        cameraRetrying = false;
+        if (cameraState === "green") startCameraStream();
+      }, 1000);
+    } else {
+      updateCamera();
+    }
+  });
+
+  // -- telemetry --------------------------------------------------------------
+  // (kept from the previous dashboard: FPS readout, sparkline, stats, controls)
+
   function render(snapshot) {
-    state = snapshot;
+    $("first-run").hidden = true;
     var running = snapshot.status === "running";
     $("lamp").className = "lamp" + (running ? " live" : "") + (snapshot.record.active ? " rec" : "");
     $("status-word").textContent = running
@@ -226,6 +503,9 @@
       $("stop").textContent = "Stop capture";
       $("stop").classList.remove("arm");
     }
+
+    renderConnections(snapshot);
+    renderCamera(snapshot);
   }
 
   $("stop").addEventListener("click", function () {
@@ -243,21 +523,71 @@
     fetch("/api/capture/stop", { method: "POST" });
   });
 
+  // -- transport: WebSocket with polling fallback ------------------------------
+
+  var wsFailures = 0;
+  var pollTimer = null;
+  var wsRetryTimer = null;
+
+  function startPolling() {
+    if (pollTimer) return;
+    $("transport").hidden = false;
+    var tick = function () {
+      fetch("/api/status")
+        .then(function (r) { return r.json(); })
+        .then(render)
+        .catch(function () { /* keep polling; the badge stays visible */ });
+    };
+    tick();
+    pollTimer = setInterval(tick, 1000);
+  }
+
+  function stopPolling() {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+    $("transport").hidden = true;
+  }
+
   function connect() {
     var proto = location.protocol === "https:" ? "wss" : "ws";
     var ws = new WebSocket(proto + "://" + location.host + "/ws");
+    ws.onopen = function () {
+      wsFailures = 0;
+      stopPolling();
+    };
     ws.onmessage = function (event) {
       var data = JSON.parse(event.data);
       if (data.kind === "ping") return;
       render(data);
     };
     ws.onclose = function () {
-      $("status-word").textContent = "reconnecting\u2026";
-      setTimeout(connect, 1500);
+      wsFailures += 1;
+      if (wsFailures >= 2) {
+        // WebSocket is not available (or keeps dying): fall back to polling
+        // and keep the "polling" badge on screen so live never lies.
+        startPolling();
+        if (!wsRetryTimer) {
+          wsRetryTimer = setTimeout(function () {
+            wsRetryTimer = null;
+            connect();
+          }, 5000);
+        }
+      } else {
+        $("status-word").textContent = "reconnecting\u2026";
+        setTimeout(connect, 1500);
+      }
+    };
+    ws.onerror = function () {
+      try { ws.close(); } catch (e) { /* already closing */ }
     };
   }
 
-  fetch("/api/status").then(function (r) { return r.json(); }).then(render);
+  fetch("/api/status")
+    .then(function (r) { return r.json(); })
+    .then(render)
+    .catch(function () { /* first-run state stays visible until a snapshot arrives */ });
   connect();
 })();
 </script>
