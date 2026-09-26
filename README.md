@@ -68,6 +68,10 @@ point/bone path. That is deliberate: the character's bone named `head` sits at c
 driving anchors from it tore the mesh by 0.82 m. The gate measures the bind's own at-rest damage
 and reverts it; see `addon/rigprofile/headbone.py`.
 
+To just watch the pipeline without opening Blender, double-click `control-room.cmd`: it starts the
+capture and opens the dashboard window (camera preview + connection lights) in browser app mode.
+See [`docs/control-room.md`](docs/control-room.md).
+
 Headless equivalents (no camera, no display):
 
 ```bash
