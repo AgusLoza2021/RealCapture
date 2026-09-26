@@ -461,6 +461,10 @@
 
   function render(snapshot) {
     $("first-run").hidden = true;
+    // The camera panel is revealed by the first snapshot and never before:
+    // until one arrives there is no state to show, and an empty frame would
+    // read as a broken camera instead of an unknown one.
+    $("camera-panel").hidden = false;
     var running = snapshot.status === "running";
     $("lamp").className = "lamp" + (running ? " live" : "") + (snapshot.record.active ? " rec" : "");
     $("status-word").textContent = running

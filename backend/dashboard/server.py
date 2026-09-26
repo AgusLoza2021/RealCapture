@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib.util
 import logging
 import threading
 import time
@@ -27,6 +28,32 @@ from .frametap import FrameTap, clamp_stream_fps, should_encode
 from .hub import BroadcastHub, DashboardHub
 
 logger = logging.getLogger(__name__)
+
+WEBSOCKET_IMPLEMENTATIONS = ("websockets", "wsproto")
+
+
+def websocket_implementation(find_spec: Callable[[str], Any] | None = None) -> str | None:
+    """Name of a WebSocket implementation uvicorn can use, or None.
+
+    uvicorn refuses every upgrade request when neither ``websockets`` nor
+    ``wsproto`` is importable. The page then degrades to its 1 s polling
+    fallback while everything still looks alive, so ``/ws`` was reported
+    broken by the browser and never by the suite: TestClient answers
+    WebSocket connections in-process and never consults this dependency.
+    Asking the question at startup turns that silence into a logged warning.
+
+    The finder is injectable so both branches are testable without
+    uninstalling anything.
+    """
+    probe = importlib.util.find_spec if find_spec is None else find_spec
+    for name in WEBSOCKET_IMPLEMENTATIONS:
+        try:
+            if probe(name) is not None:
+                return name
+        except (ImportError, ValueError):
+            # A missing parent package raises instead of returning None.
+            continue
+    return None
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 

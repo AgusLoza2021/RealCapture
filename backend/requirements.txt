@@ -3,4 +3,9 @@
 mediapipe>=0.10.9,<1.1
 opencv-python>=4.8.0
 fastapi>=0.110
+# uvicorn alone cannot serve /ws: it refuses every upgrade request unless
+# `websockets` or `wsproto` is importable, and the dashboard then degrades to
+# 1 s polling while still looking alive. Named explicitly because the extras
+# are not required for anything else.
 uvicorn>=0.29
+websockets>=12

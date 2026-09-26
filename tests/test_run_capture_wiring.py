@@ -7,10 +7,18 @@ would silently freeze a light at whatever it read on the first call.
 """
 
 import json
+import socket
 import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+from types import SimpleNamespace
 
 from backend.dashboard.hub import DashboardHub
-from backend.run_capture import _HeartbeatSource, _tap_camera_age
+from backend.dashboard.server import websocket_implementation
+from backend.run_capture import _HeartbeatSource, _start_dashboard, _tap_camera_age
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Verbatim payload received over UDP from the addon on the reference MPFB2
 # character, read with a listener socket bound to the sender's own port:
@@ -137,3 +145,141 @@ def _started_backend():
     backend = _Backend()
     backend.heartbeat = _Tracker(0.5, REAL_WIRE_BIND)
     return backend
+
+
+class _StubCaptureBackend:
+    """The whole surface ``_start_dashboard`` touches on a real backend."""
+
+    def __init__(self):
+        self.on_frame = None
+        self.on_packet = None
+        self.on_send_error = None
+        self.stop_calls = 0
+
+    def stop(self):
+        self.stop_calls += 1
+
+
+def _free_port():
+    """A port nothing is listening on, released before the caller binds it."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def _dashboard_args(port):
+    return SimpleNamespace(
+        stream_fps=12.0,
+        dashboard=port,
+        engine="mediapipe",
+        host="127.0.0.1",
+        port=11111,
+    )
+
+
+def _await_http(url, deadline_s=15.0):
+    """Poll a real socket until it answers, so a bind race is not a failure."""
+    deadline = time.monotonic() + deadline_s
+    last_exc = None
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=1.0) as response:
+                return response.status, response.read(), response.headers.get("content-type", "")
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read(), exc.headers.get("content-type", "")
+        except (urllib.error.URLError, OSError) as exc:
+            last_exc = exc
+            time.sleep(0.05)
+    raise AssertionError(f"{url} never answered within {deadline_s}s: {last_exc!r}")
+
+
+def test_the_entry_points_dashboard_path_actually_serves_the_window():
+    """Run the branch every other test here skips.
+
+    Everything above reaches the server through ``TestClient``, so all of it
+    stayed green while ``_start_dashboard`` raised ``NameError: name
+    'threading' is not defined`` on its last line and killed ``main()``
+    before the window could ever be served. A suite that never executes the
+    branch it is judging reports success it has not earned, so this test
+    starts the real server on a real port.
+
+    The uvicorn server object is local to ``_start_dashboard`` and cannot be
+    reached to shut it down; the daemon thread dies with the test process,
+    which is why this runs once rather than per-case.
+    """
+    port = _free_port()
+    backend = _StubCaptureBackend()
+
+    thread, hub = _start_dashboard(backend, _dashboard_args(port))
+
+    assert thread.daemon is True
+    assert hub is not None
+    assert backend.on_frame is not None, "the camera preview was never wired"
+    assert backend.on_packet is not None, "the status lights were never wired"
+
+    status, body, content_type = _await_http(f"http://127.0.0.1:{port}/")
+    assert status == 200
+    assert "text/html" in content_type
+    assert b"<html" in body.lower()
+
+    status, body, _ = _await_http(f"http://127.0.0.1:{port}/api/status")
+    assert status == 200
+    lights = {row["id"]: row for row in json.loads(body)["connections"]}
+    assert set(lights) == {"camera", "packets", "blender"}
+    # The stub backend never emits a frame, so the honest answer is red with
+    # a reason - never a quiet green.
+    assert lights["camera"]["state"] == "red"
+    assert lights["camera"]["reason"].strip()
+
+    # Same honesty rule on the snapshot endpoint: no fabricated frame.
+    status, body, content_type = _await_http(f"http://127.0.0.1:{port}/camera.jpg")
+    assert status == 503
+    assert "text/plain" in content_type
+    assert body.strip(), "503 carried no reason"
+
+
+class TestTheDashboardCanActuallyPush:
+    """The WebSocket dependency the suite can never notice by testing.
+
+    ``TestClient`` answers WebSocket connections in-process, so every
+    dashboard test stayed green while uvicorn refused every upgrade request
+    in production with "No supported WebSocket library detected". The page
+    then fell back to 1 s polling and kept reporting live numbers, so the
+    degradation was invisible from inside the app too. Only a browser - or
+    the dependency list - can see this.
+    """
+
+    def test_requirements_name_a_websocket_implementation(self) -> None:
+        declared = set()
+        for line in (REPO_ROOT / "backend" / "requirements.txt").read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            for sep in (">=", "==", "~=", ">"):
+                if sep in line:
+                    line = line.split(sep, 1)[0]
+                    break
+            declared.add(line.strip().lower())
+        assert declared & {"websockets", "wsproto", "uvicorn[standard]"}, (
+            f"no WebSocket implementation is declared, so uvicorn will refuse "
+            f"/ws and the page can only poll; declared: {sorted(declared)}"
+        )
+
+    def test_absence_is_reported_rather_than_assumed(self) -> None:
+        assert websocket_implementation(find_spec=lambda name: None) is None
+
+    def test_the_installed_name_is_returned(self) -> None:
+        def fake(name):
+            return object() if name == "wsproto" else None
+
+        assert websocket_implementation(find_spec=fake) == "wsproto"
+
+    def test_a_finder_that_raises_is_not_a_crash(self) -> None:
+        def fake(name):
+            raise ModuleNotFoundError(name)
+
+        assert websocket_implementation(find_spec=fake) is None
+
+    def test_the_real_environment_is_asked_and_named(self) -> None:
+        found = websocket_implementation()
+        assert found is None or found in ("websockets", "wsproto")

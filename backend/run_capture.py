@@ -12,6 +12,7 @@ import argparse
 import logging
 import socket
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Callable
@@ -113,7 +114,7 @@ class _HeartbeatSource:
         return None if tracker is None else tracker.bind_report()
 
 
-def _start_dashboard(backend: CaptureBackend, args: argparse.Namespace) -> threading.Thread:
+def _start_dashboard(backend: CaptureBackend, args: argparse.Namespace) -> tuple[threading.Thread, DashboardHub]:
     """Serve the companion dashboard in a daemon thread wired to this backend."""
     import socket as socket_mod
 
@@ -121,7 +122,25 @@ def _start_dashboard(backend: CaptureBackend, args: argparse.Namespace) -> threa
 
     from backend.dashboard.frametap import FrameTap, clamp_stream_fps
     from backend.dashboard.hub import BroadcastHub, DashboardHub
-    from backend.dashboard.server import DashboardControls, build_jpeg_encoder, create_app
+    from backend.dashboard.server import (
+        WEBSOCKET_IMPLEMENTATIONS,
+        DashboardControls,
+        build_jpeg_encoder,
+        create_app,
+        websocket_implementation,
+    )
+
+    # uvicorn silently rejects every upgrade request without a WebSocket
+    # implementation. The page would still look alive on the polling fallback,
+    # so say it out loud instead of shipping a quiet degradation.
+    if websocket_implementation() is None:
+        logger.warning(
+            "live push disabled: neither %s is installed, so /ws is refused and the "
+            "dashboard will poll once per second instead. Install it with: "
+            "%s -m pip install websockets",
+            " nor ".join(WEBSOCKET_IMPLEMENTATIONS),
+            sys.executable,
+        )
 
     broadcast = BroadcastHub(on_subscriber_error=lambda exc: logger.warning("dashboard subscriber failed: %s", exc))
 

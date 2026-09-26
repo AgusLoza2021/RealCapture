@@ -67,3 +67,35 @@ class TestDashboardUIServed:
         html = _index_html(client)
         assert "http://" not in html
         assert "https://" not in html
+
+
+def _inline_script(html: str) -> str:
+    """The page's JS, without the markup and the CSS around it."""
+    start = html.index("<script>")
+    end = html.index("</script>", start)
+    assert end > start
+    return html[start:end]
+
+
+class TestCameraPanelIsReachable:
+    """A panel nobody unhides is a feature nobody can see.
+
+    The markup ships ``<section id="camera-panel" hidden>``, so every
+    assertion above could pass - and did - while the script never once
+    mentioned the element and the camera preview was unreachable in a real
+    browser. Only the HTML was inspected; nothing ran it.
+    """
+
+    def test_the_markup_ships_the_panel_hidden(self, client) -> None:
+        assert 'id="camera-panel" hidden' in _index_html(client)
+
+    def test_the_script_reveals_the_panel(self, client) -> None:
+        script = _inline_script(_index_html(client))
+        assert "camera-panel" in script, (
+            "the camera panel is never revealed: it stays hidden no matter what "
+            "the camera light says"
+        )
+
+    def test_the_reveal_is_an_unhide_and_not_a_hide(self, client) -> None:
+        script = _inline_script(_index_html(client))
+        assert '$("camera-panel").hidden = false' in script

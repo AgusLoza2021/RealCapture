@@ -323,9 +323,40 @@ path in Blender (only the headless pumped-tick path ran).
 - Not fixing the missing character generator or the preflight doctor — those are the separate
   onboarding blockers recorded in the onboarding audit and stay their own slice.
 
+## W7 - first run in a real browser (three defects)
+
+Phase 1 closed with the window "verified" by tests alone. The first real browser run
+(Edge headless against a live camera) found three defects that every test had missed,
+all of the same family: the suite judges the served document and the in-process
+``TestClient``, never the path a human takes.
+
+1. ``backend/run_capture.py`` used ``threading.Thread`` without importing ``threading``,
+   so ``--dashboard`` raised ``NameError`` at ``_start_dashboard`` and the window could
+   never be served from the real entry point. ``TestClient`` builds the app directly,
+   so nothing in ``tests/`` touched that function.
+2. ``backend/requirements.txt`` declared plain ``uvicorn``, which cannot serve ``/ws``
+   without ``websockets`` or ``wsproto``. uvicorn refused every upgrade request
+   ("No supported WebSocket library detected"), the page fell back to 1 s polling and
+   kept showing live numbers, so the degradation was invisible from inside the app too.
+   ``TestClient`` answers WebSocket connections in-process and never consults it.
+3. ``<section id="camera-panel" hidden>`` was never unhidden by the script: the camera
+   preview, the headline feature of the window, was unreachable in a browser no matter
+   what the camera light said.
+
+Evidence: ``/camera.jpg`` 200 with a 27 KB JPEG; ``/ws`` connected in 10 ms and pushed
+228 snapshots in 8 s; the header read "capture running" instead of "reconnecting..."; the
+rendered window showed the live camera image next to Camera GREEN, Packets GREEN and
+Blender rig RED with its reason.
+
+Lesson carried into phase 2: a green suite that never executes the branch the human
+uses is not evidence about that branch. Add the browser to the verification loop for
+any UI slice, and read a real rendering - never a reasoned one.
+
 ## Open questions
 
 1. Window technology: app-mode window (recommended) vs plain browser tab vs native shell.
 2. Does the camera preview need to work when capture is stopped (a "camera check" before starting)?
    Cheap to add in W2, but it changes the lifetime of the frame source.
 3. Heartbeat staleness threshold (green→yellow). Proposed: yellow after ~2 s, red after ~5 s.
+4. Should the window ship a screenshot in the README? The rendering is now proven, but the
+   only capture in hand shows the author's face; publishing a personal photo is the owner's call.
