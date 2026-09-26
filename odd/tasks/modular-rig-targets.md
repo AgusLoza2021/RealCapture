@@ -152,6 +152,7 @@ Delivered by a delegated writer, then verified independently by the parent, beca
 - **Not covered yet**: nothing calls this module. R5b (Blender-side application through the adapter)
   and R6 (the editing surface) are the consumers; until one of them lands, these rules are proven on
   synthetic mappings only, never against a real mesh.
+- **Work unit**: committed as `a44eac3` on branch `phase2/weight-zones`.
 
 ## Non-goals
 
