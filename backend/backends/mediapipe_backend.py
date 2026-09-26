@@ -166,6 +166,12 @@ class MediaPipeBackend(CaptureBackend):
                         time.sleep(0.05)
                         continue
 
+                    # Publish the raw BGR frame for the camera preview BEFORE
+                    # the RGB conversion: the injected encoder expects what
+                    # cv2 produced. Defensive: a raising observer must never
+                    # break capture.
+                    self.notify_frame(frame)
+
                     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
                     timestamp_ms = self._next_timestamp_ms()

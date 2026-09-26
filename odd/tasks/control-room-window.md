@@ -57,10 +57,10 @@ and the light needs a signal that does not exist yet.
 Not started. Order matters: the data feeds are needed in every UI variant, and they are also the
 only part that can be built and tested before the visual design exists.
 
-- [ ] W1. **Frame tap (pure logic).** A bounded single-slot "latest frame" holder fed by the capture
+- [x] W1. **Frame tap (pure logic).** A bounded single-slot "latest frame" holder fed by the capture
   loop, so a slow consumer can never queue 30 fps of frames in memory. Unit-tested with a fake frame
   source, no cv2 and no real camera.
-- [ ] W2. **Frame transport.** JPEG encode at a capped rate (target ≤15 fps, quality tuned for a
+- [x] W2. **Frame transport.** JPEG encode at a capped rate (target ≤15 fps, quality tuned for a
   face), served as `multipart/x-mixed-replace` on `/camera.mjpg`, plus a REST `GET /camera.jpg` for
   one-shot. Bounded: when nobody is watching, nothing is encoded.
 - [ ] W3. **Blender back-channel.** The addon answers the sender's address with a small heartbeat
@@ -74,6 +74,49 @@ only part that can be built and tested before the visual design exists.
   connection cards, existing telemetry, and a first-run empty state that says what to do next.
 - [ ] W6. **Launch + docs.** A double-clickable path to the window (app mode) and a short doc; the
   existing `camera-to-rig.cmd` flow gains the dashboard flag.
+
+## Evidence — W1 and W2 delivered
+
+One work unit, ending in something a human can open: `GET /camera.mjpg` streams the camera as
+`multipart/x-mixed-replace`, and `GET /camera.jpg` returns one snapshot. Verified by the parent,
+not taken from the writer's report.
+
+| what | where |
+| --- | --- |
+| pure tap, no cv2 and no numpy | `backend/dashboard/frametap.py` (`FrameTap`, `should_encode`, `clamp_stream_fps`, `MAX_STREAM_FPS = 15`) |
+| endpoints | `backend/dashboard/server.py` — `/camera.mjpg`, `/camera.jpg`; both answer 503 with a plain-text reason naming the missing thing instead of starting a healthy-looking empty stream |
+| frame source | `backend/backends/base.py` (`on_frame` hook, `notify_frame`) and `backend/backends/mediapipe_backend.py` (publishes the raw BGR frame before the RGB conversion, once per captured frame) |
+| wiring | `backend/run_capture.py` — the tap is built with the injected JPEG encoder (downscale to 640 px, cv2 imported lazily inside the closure) and passed to `create_app`; one new flag, `--stream-fps` (default 12) |
+| tests | `tests/test_frametap.py`, `tests/test_camera_stream.py` |
+
+`python -m pytest tests -q` → **237 passed, 1 warning** (was 210 before this work unit). The suite runs
+on the system Python, which has no cv2: the tap and the endpoints are exercised with fakes, and the
+lazy cv2 import inside the encoder is what keeps that possible. Do not "fix" it into a module-level import.
+
+Measured, with numbers the parent reproduced independently (500 frames at 30 fps, cap 15): **zero
+subscribers → 0 calls to the encoder**; one subscriber → non-zero. That is the "idle means no encode"
+requirement, and it is the behaviour most likely to regress silently, so it is asserted directly.
+`--stream-fps` clamps: 12 → 12, 60 → 15, 0 → 1, -3 → 1, 1000 → 15. It cannot exceed 15.
+
+### Two decisions taken while building it
+
+- **The cap is a cap, not a target.** Measured through the ASGI app, the stream lands at roughly
+  10.8 fps rather than 15: after each encode the generator re-polls, so every frame pays the poll
+  interval on top of the minimum interval. It never exceeds the cap, which is the property that
+  protects the machine, and a preview a few frames short of 15 is invisible. Recorded here so nobody
+  later reads the gap as a leak. If it ever matters, the fix is to track `next_encode_t = last + interval`
+  rather than to sprinkle an epsilon.
+- **The stream ends honestly after about five seconds with no fresh frame** instead of re-looping the
+  last frame forever. A frozen face looks alive; a broken image does not. The cost is a visibly broken
+  image when capture stops, and W4 must carry the reason as text in the window so the silence is named.
+
+### Not verified (stated, not implied)
+
+- **The live path.** There is no camera in this environment, so `cap.read()` → publish → `cv2.imencode`
+  with `backend/.venv`, and the endpoint under a real `uvicorn`, were never executed. Everything above
+  is exercised through the ASGI app with fake frames. This is the same unproven link as
+  `camera-to-rig.cmd`: it needs the owner's face in front of a real camera.
+- The 503 branch for "tap present but no encoder bound" has no dedicated test.
 
 ## Non-goals
 

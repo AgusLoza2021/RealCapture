@@ -48,6 +48,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="serve the companion web dashboard on this port (e.g. 8765)",
     )
     parser.add_argument(
+        "--stream-fps",
+        type=float,
+        default=12.0,
+        help="camera preview stream fps for the dashboard (clamped to at most 15)",
+    )
+    parser.add_argument(
         "--osf-command",
         default="",
         help=(
@@ -83,11 +89,22 @@ def _start_dashboard(backend: CaptureBackend, args: argparse.Namespace) -> threa
 
     import uvicorn
 
+    from backend.dashboard.frametap import FrameTap, clamp_stream_fps
     from backend.dashboard.hub import BroadcastHub, DashboardHub
-    from backend.dashboard.server import DashboardControls, create_app
+    from backend.dashboard.server import DashboardControls, build_jpeg_encoder, create_app
 
     hub = DashboardHub()
     broadcast = BroadcastHub(on_subscriber_error=lambda exc: logger.warning("dashboard subscriber failed: %s", exc))
+
+    # Camera preview feed: the backend publishes raw BGR frames into the tap,
+    # the dashboard encodes them at the capped rate when someone is watching.
+    stream_fps = clamp_stream_fps(args.stream_fps)
+    frame_tap = FrameTap(encode=build_jpeg_encoder())
+
+    def on_frame(frame, frame_t: float) -> None:  # noqa: ANN001 - raw cv2 frame
+        frame_tap.publish(frame, frame_t)
+
+    backend.on_frame = on_frame
 
     def on_packet(packet, proc_ms: float) -> None:  # noqa: ANN001 - schema.Packet
         hub.record_sent(
@@ -107,7 +124,7 @@ def _start_dashboard(backend: CaptureBackend, args: argparse.Namespace) -> threa
         backend.stop()
 
     controls = DashboardControls(stop_capture=stop_capture)
-    app = create_app(hub, broadcast, controls)
+    app = create_app(hub, broadcast, controls, frame_tap=frame_tap, stream_fps=stream_fps)
     config = uvicorn.Config(app, host="0.0.0.0", port=args.dashboard, log_level="warning")
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, name="dashboard-http", daemon=True)

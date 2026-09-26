@@ -15,7 +15,7 @@ import socket
 import threading
 import time
 from abc import ABC, abstractmethod
-from typing import Callable
+from typing import Any, Callable
 
 from ..common.packets import Packet
 
@@ -63,6 +63,7 @@ class CaptureBackend(ABC):
         # Optional dashboard hooks (see backend/dashboard/hub.py). Called from
         # the capture thread; must never raise into the capture loop.
         self.on_packet: Callable[[Packet, float], None] | None = None
+        self.on_frame: Callable[[Any, float], None] | None = None
         self.on_send_error: Callable[[], None] | None = None
 
     # -- lifecycle -----------------------------------------------------------
@@ -134,6 +135,23 @@ class CaptureBackend(ABC):
             self.run_loop()
         except Exception:  # noqa: BLE001 - keep process alive, log full context
             logger.exception("capture loop crashed in %s backend", self.backend_name)
+
+    def notify_frame(self, frame: Any, t: float | None = None) -> None:
+        """Hand a captured frame to the optional on_frame observer.
+
+        Defensive, mirroring the on_packet rule: a callback that raises must
+        never escape into the capture loop. When ``t`` is omitted a monotonic
+        timestamp is supplied.
+        """
+        callback = self.on_frame
+        if callback is None:
+            return
+        if t is None:
+            t = time.monotonic()
+        try:
+            callback(frame, t)
+        except Exception:  # noqa: BLE001 - observer must not break capture
+            logger.exception("on_frame observer failed")
 
     def send_packet(self, packet: Packet) -> None:
         """Best-effort UDP send; never raises into the capture loop."""
