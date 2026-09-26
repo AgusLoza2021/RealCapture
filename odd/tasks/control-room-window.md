@@ -72,7 +72,7 @@ only part that can be built and tested before the visual design exists.
   the lights trustworthy.
 - [x] W5. **The window itself.** Read the `frontend-design` skill before writing markup; camera panel,
   connection cards, existing telemetry, and a first-run empty state that says what to do next.
-- [ ] W6. **Launch + docs.** A double-clickable path to the window (app mode) and a short doc; the
+- [x] W6. **Launch + docs.** A double-clickable path to the window (app mode) and a short doc; the
   existing `camera-to-rig.cmd` flow gains the dashboard flag.
 
 ## Evidence — W1 and W2 delivered
@@ -280,6 +280,40 @@ Suite: **346 passed, 1 warning**.
 **Still unverified at the end of this phase:** the window rendered in a real browser; the whole chain
 with a live camera and a live face in front of it (no camera in the agent environment); the GUI timer
 path in Blender (only the headless pumped-tick path ran).
+
+## Evidence — W6 delivered (phase 1 complete)
+
+`control-room.cmd` (repo root), `docs/control-room.md`, a pointer in `README.md`, and
+`tests/test_control_room_launcher.py` (19 pinning tests, including three added by the parent).
+
+- **Defect caught by the parent in the delivered launcher.** W6's whole point was "a window, not a browser
+  tab". The delivered file decided app mode with `where msedge`, which **fails on this very machine** even
+  though Edge is installed at `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe` — a stock
+  Windows install does not put Edge on PATH. The branch that would actually have run is the ordinary-tab
+  fallback: the headline behaviour of the unit, silently replaced by a plausible-looking substitute, with no
+  message. Fixed by probing the three install locations (machine x86, machine, per-user) before falling back
+  to PATH, and by announcing the fallback when it does happen. Proven by running the launcher's own lines in
+  cmd: `RESOLVED=[C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe]`.
+- **Second defect: the doc contradicted the window.** It said UNKNOWN "is shown the same way as red". The
+  window draws it as a hollow grey dot, deliberately unlike red, because "not known yet" is not "failed".
+  Fixed in the doc and pinned by a test that compares the actual CSS rules, so collapsing the two states
+  fails the suite.
+- The failure path runs live on this camera-less machine: `control-room.cmd --no-browser --port 8799`
+  reports that the pipeline never answered, names the likely causes, stops the capture, and exits **3**
+  (`tasklist`/port check confirm nothing was left running). `--bogus` exits 2 with a usage line.
+- Mutation proofs: drop the `ping`-based wait → the sleep test fails; rename the Edge path → the Edge test
+  fails. Both reverted, suite green.
+- Suite: **365 passed** (baseline at the start of W6: 346). The only warning is a third-party FastAPI/httpx
+  deprecation, not ours.
+
+**Gaps this phase ends with, stated rather than papered over:**
+
+1. The **success path of the launcher has never run**: it needs a camera, and this machine has none, so
+   "the server answers → the browser opens → a keypress stops the capture" is reasoned, not observed.
+2. **No browser has been opened by anyone.** The window's appearance is still unverified.
+3. The launcher's wait bound is 30 attempts of `ping -n 2` plus a probe, so it is "about 30 seconds" only at
+   idle; under capture-startup load it stretches to a few minutes. It errs toward patience, not toward a
+   false failure, and the doc does not promise a duration.
 
 ## Non-goals
 
