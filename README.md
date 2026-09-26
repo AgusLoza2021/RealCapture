@@ -48,6 +48,36 @@ The capture backend runs as an external process and needs the media stack; see
 addon needs no dependencies beyond Blender itself; see [`addon/README.md`](addon/README.md)
 for install and quick start.
 
+## Camera to rig (the demo you can watch)
+
+Double-click `camera-to-rig.cmd` and sit in front of the camera: the pipeline in one window drives
+a real generated MPFB2 character in Blender with the same consumer path the addon uses.
+
+```bat
+camera-to-rig.cmd          :: camera 0
+camera-to-rig.cmd 1        :: camera 1
+```
+
+It needs two things that are **not** in the repository: a camera, and a generated MPFB2 character
+at `%TEMP%\rc_mpfb\tmp\character.blend` with MPFB2 installed in an isolated Blender config. With
+nothing in front of the camera, MediaPipe detects no face and the backend sends no packets at all,
+so the Blender window looks frozen -- that is the pipeline working, not a hang.
+
+For a real character the bind reports that it bound **shape keys only**, and refuses the
+point/bone path. That is deliberate: the character's bone named `head` sits at chest height, so
+driving anchors from it tore the mesh by 0.82 m. The gate measures the bind's own at-rest damage
+and reverts it; see `addon/rigprofile/headbone.py`.
+
+Headless equivalents (no camera, no display):
+
+```bash
+# Inject one packet through the real consumer path and assert a named shape key moved.
+blender -b --python tools/blender_mpfb_live.py -- --self-test
+
+# Bounded headless run of the real UDP receive path: exits 0 when packets arrived.
+blender -b --python tools/blender_mpfb_live.py -- --seconds 20
+```
+
 ## Headless checks
 
 ```bash
