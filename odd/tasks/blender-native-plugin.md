@@ -95,6 +95,17 @@ but it stops being the only path.
     to `dist/`, which becomes gitignored.
 14. **License.** `license = ["SPDX:GPL-3.0-or-later"]` in the manifest, the
     same as the repository's `LICENSE`.
+15. **A child that dies inside the startup grace is reported dead, never
+    announced as started.** `start_backend` waits up to ~0.25 s after `Popen`;
+    if the child has already exited, the reason APPENDS `it exited immediately
+    (exit code N); see the log: <path>` to the reason that already says whether
+    the dashboard port was checked. The panel renders that reason verbatim, and
+    it asks `is_alive()` before it calls anything running. A child that dies on
+    its first line (broken venv, bad argument, occupied port) is the loudest
+    failure of this feature; it must not leave a green-looking panel behind.
+16. **Every refusal is a `BackendError` naming the offending value, including a
+    wrong TYPE.** `fps="30"` arriving from a preference, an integer field, must
+    not surface as a bare `TypeError` traceback in Blender's console.
 
 ## Work units
 
@@ -178,7 +189,7 @@ install time.
   (`python -c "import packaging"` from the repo root resolves to
   site-packages). Nothing in this repository imports `packaging`.
 
-### P2 - `addon/backend_process.py`: the launcher core, pure and bpy-free
+### P2 - `addon/backend_process.py`: the launcher core, pure and bpy-free (done)
 
 Resolution (repo root, interpreter, script, log path), the argv builder, the
 environment, the hidden-start flags, start / stop / is-alive, and an injected
@@ -188,12 +199,29 @@ prober for "something already answers on the dashboard port". Stdlib only, no
 Acceptance: focused tests, plus a mutation proof on the empty-value guard
 (deleting the guard must fail a test).
 
-### P3 - `addon/dashboard_client.py`: the status reader, pure and bpy-free
+**Contract amendment, from this delivery.** Two rules were added while P2 was
+under review (15 and 16 above): the argv builder refuses a wrong TYPE, not only
+an out-of-range value, and `start_backend` now reports a child that died inside
+a short startup grace with its exit code and its log path instead of returning
+`started=True` alone. Both were gaps in the parent's own contract, found by
+reading the delivery.
+
+**Checked and answered, not changed:** `build_argv` refuses
+`dashboard_port == 0` because 0 is the backend's "dashboard off" switch and a
+cockpit that cannot read a dashboard has no lights to draw.
+
+### P3 - `addon/dashboard_client.py`: the status reader, pure and bpy-free (done)
 
 An injected fetcher, a defensive parse of `/api/status` (a missing or renamed
 field renders an explicit unknown state, never green), and a cockpit model
 distinguishing `offline(reason)` from `online(connections)` from
 `stale(age_s)`. Stdlib only, testable on the system Python.
+
+**Checked and answered, not changed:** a failed poll keeps the last good
+`fetched_at` and the same `connections` array, with `error` set, so the panel
+can render live data with the age of the data it is still showing;
+`fetched_at == 0.0` means "no successful read yet" and must never be rendered
+as an age.
 
 ### P4 - the cockpit: `addon/preferences.py`, `addon/ui.py`, `addon/__init__.py`
 
@@ -222,6 +250,31 @@ the child gone. Then the owner's own test with a real face.
   (`argument --port: expected one argument`), the fix verified by the new
   launcher test failing without the `set "PORT=11111"` line and passing with
   it.
+- P2/P3, reproduced by the parent in its own hands (the writer's report was
+  not taken as evidence):
+  - `python -m pytest tests/test_backend_process.py
+    tests/test_dashboard_client.py -q` -> `69 passed` (37 + 32).
+  - Neither module imports `bpy` (docstring mentions only); the only
+    non-stdlib import is `dashboard_client` importing the probe constants from
+    `backend_process`.
+  - Five mutations, each breaking exactly one gate and each restored
+    byte-identically: a `shutil.which("python")` fallback for the missing venv
+    interpreter -> `test_resolve_paths_missing_interpreter_names_venv_path_no_
+    path_fallback`; `parse_status` reversing the dashboard's array ->
+    `test_parse_status_returns_connections_verbatim`; a failed poll stamping
+    `fetched_at` as if it were live data -> two poller gates; the startup grace
+    disabled -> `test_start_backend_reports_a_child_that_died_inside_the_grace`;
+    `fps` back to a bare comparison -> the wrong-type gate. The two
+    parent-owned amendments were mutation-proved the same way.
+  - The real child contract was observed through a `popen_factory` recorder
+    that delegates to the real `subprocess.Popen`: `creationflags ==
+    CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP` on Windows, the log appended
+    in the log directory, and a stop that kills only the tree it started.
+  - A live measurement of the grace reason, from a real child that exits 3:
+    `backend started (pid 28192); dashboard port None was not checked; it exited
+    immediately (exit code 3); see the log: <log_path>`.
+  - Canonical suite after the README pin moved 410 -> 479: `479 passed,
+    1 warning`.
 
 ## Open questions
 
