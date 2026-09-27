@@ -45,9 +45,9 @@ The implementation is substantially complete but is split across local-only bran
 - [x] C1 — Verify, publish, and integrate `blender-native-plugin`.
   - Route: delegated verification (`gentle-ai-verify`); publication/integration inline Git operations.
   - Evidence: `524 passed, 1 warning`; extension build exit 0 (`realcapture-0.1.0.zip`, 61151 bytes); Blender validator exit 0; `blender-native-plugin` and `main` both published at `6b470e5417f60a4cf0ffde3f9ab85e12da534468` with matching remote readback. Native committed-range review was unavailable (`schema-incompatible`, `lineage_created: false`), so the high-risk fallback used the independent verifier.
-- [ ] C2 — Rebase, verify, publish, and integrate `phase2/weight-zones`.
+- [x] C2 — Rebase, verify, publish, and integrate `phase2/weight-zones`.
   - Route: delegated verification; rebase/integration inline Git operations.
-  - Acceptance: five work units remain intact, conflicts are resolved without dropping the dashboard refusal fix, canonical suite passes, branch and `main` are pushed.
+  - Evidence: five original work units remained distinct after rebase; two README count conflicts were reconciled to the integrated total; focused tests reported 65 passed and the canonical suite reported 582 passed; stale pre-rebase evidence hashes were refreshed in `2a5e5f2`; feature and `main` remote refs both read back as `2a5e5f26756f2b26ad68d87fc49e093e14971059`. Backup `backup/phase2-weight-zones-pre-integration` retains original `7ca94c5`.
 - [ ] C3 — Reconcile the Telegram broker semantics.
   - Route: delegated mapper/writer because the decision spans service scripts, launcher, docs, and tests.
   - Acceptance: one coherent on-demand model, no console flash, no duplicate broker, tests mutation-capable, PR #4 closed or superseded with an explicit reason.
@@ -70,10 +70,10 @@ The implementation is substantially complete but is split across local-only bran
 ## Progress
 
 - C1 closed: the plugin branch and `main` are published at `6b470e5417f60a4cf0ffde3f9ab85e12da534468`; independent verification observed 524 tests, a successful extension build, and a successful Blender validator run.
-- `phase2/weight-zones` remains five independent commits from the old `a4bc300` base and must be rebased onto published `main` without losing its dashboard refusal fix.
+- C2 closed: `phase2/weight-zones` was rebased, verified at 582 tests, published, and fast-forwarded into `main` at `2a5e5f26756f2b26ad68d87fc49e093e14971059`.
 - Bridge PR #4 is open while local `feat/voice-transcription` implements a competing PT5M/IgnoreNew strategy.
 - Owner authorization received: "Dale, encargate de resolver todo eso."
 
 ## Next step
 
-Rebase and verify `phase2/weight-zones` for C2.
+Reconcile the Telegram bridge's competing broker semantics for C3.
