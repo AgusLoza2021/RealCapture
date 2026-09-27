@@ -392,7 +392,7 @@ was run over real uvicorn and real HTTP, on three real servers:
 
 Mutation proof: disabling the new guard makes the first case answer ``200`` and then send no bytes
 within the 3 s read timeout - the defect reproduced end to end over the wire. Restored, the suite
-is green: 455 passed. Commit ``beaf49e``.
+is green: 455 passed. Commit ``96cc8e1``.
 
 ## Open questions
 
