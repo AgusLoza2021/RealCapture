@@ -23,6 +23,14 @@ A light is never green because data is absent: when something is wrong, the ligh
 line says what. Blender does not need to be open — its light simply reads red with that
 reason until Blender joins. See [`docs/control-room.md`](docs/control-room.md).
 
+## Running it inside Blender
+
+The add-on installs as a Blender 4.2+ extension, so the pipeline can be driven from the 3D
+Viewport sidebar: **Start**, **Stop**, **Control Room**, plus the three connection lights with
+their reasons. No console window opens — the backend runs as a hidden child process and logs
+to `soak_output/backend.log`. See
+[`docs/install-blender-addon.md`](docs/install-blender-addon.md).
+
 ## Design pillars
 
 1. **Capture is commodity; mapping is the product.** Capture engines are pluggable
@@ -156,7 +164,7 @@ measurement.
 | `addon/` | Blender addon: receiver, consumer, telemetry, session record/replay, rig connector, wizard, UI panel |
 | `tools/` | Headless Blender smoke and soak tests, the soak sender, and the pure soak gate logic |
 | `tests/` | pytest suite (524 tests) |
-| `docs/` | Technical design, milestone roadmap, Control Room guide, landscape research |
+| `docs/` | Technical design, milestone roadmap, Control Room guide, Blender add-on install guide, landscape research |
 | `odd/` | Feature task documents and their evidence |
 
 ## Scope and IP boundary
