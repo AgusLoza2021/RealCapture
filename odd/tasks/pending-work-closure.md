@@ -57,6 +57,7 @@ The RealCapture implementation and its two completed feature branches are publis
 - [x] C5 — Close the remaining technical decisions.
   - Route: inline synthesis from verified evidence.
   - Recorded decisions: the MPFB2/ARKit shape-key-first path is the proven default (live C4 run moved real driven shape keys through the installed consumer); the bone path is gated and inactive (`no_head_bone` skip reason on this MPFB2 rig) and stays off until a rig with a usable head bone exists; `rigprofile/weights.py` is reversible R5a groundwork with no production caller — no destructive automatic weighting runs; R5b/R8/R9 remain open; the 30-minute M1 stall remains open; the post-inference latency blind spot remains open; short C3/C4 runs do not clear M1.
+  - Work-unit commit: `a2bd1658407ddef279ed1d6578ac95ea464d489f` (`fix(blender): report ARKit coverage by channel identity`).
 
 ## Progress
 
@@ -74,4 +75,4 @@ The RealCapture implementation and its two completed feature branches are publis
 
 ## Next step
 
-C5 is closed: the MPFB2/shape-key-first and reversible-weight decisions are recorded with the bone path explicitly gated/inactive and `weights.py` as uncalled groundwork. The failed 30-minute M1 soak, the post-inference latency blind spot, and unwired weight application remain explicit open limits; R5b/R8/R9 stay open.
+Publish `feat/installed-start-proof`, verify the remote feature SHA, then fast-forward `main` only after the committed C5 boundary passes its final independent verification. The failed 30-minute M1 soak, the post-inference latency blind spot, unwired weight application, and R5b/R8/R9 remain explicit open limits after publication.
