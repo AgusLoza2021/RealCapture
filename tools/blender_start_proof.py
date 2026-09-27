@@ -38,9 +38,11 @@ proof records observed evidence, never an assumption):
     lights verbatim, controller properties as diagnostics, and the ACTUAL
     rig target movement: accumulated non-Basis shape-key deviations over the
     whole window. Controller or metadata jitter alone can never green the
-    movement gate. Observed live channels are the exact ``rc_shape_`` keys
-    in the consumer's ``_last_values`` after the pump — data THIS run wrote,
-    never pre-existing properties, pose keys, or metadata.
+    movement gate. Raw observed producer channel names are the exact
+    ``rc_shape_`` keys in the consumer's ``_last_values`` after the pump —
+    data THIS run wrote, never pre-existing properties, pose keys, or
+    metadata. Coverage is the NAME intersection against the installed
+    catalog, never a count comparison.
 7.  In ``finally``, capture and backend are always stopped through the
     installed operators, each exactly once; the harness never stops the
     ``BackendProcess`` object directly. Stop truth comes from the exact
@@ -60,14 +62,17 @@ proof records observed evidence, never an assumption):
 Coverage honesty: no synthetic target sweep is executed or claimed by this
 run; the historical 52/52 sweep (a per-channel drive of the rig targets) is
 separate task evidence outside this report. Real producer coverage is only
-ever claimed from the channels actually observed live in this run; the
-channel catalog size is never used to inflate it, and a run that observed
-zero live channels is never green.
+ever claimed from the raw channel NAMES actually observed live in this run,
+intersected with the configured catalog by ``coverage_truth`` — never from a
+count comparison (52 raw names = 51 ARKit matches + ``_neutral`` is honest
+51/52, not 52/52), and a run that observed zero catalog matches is never
+green.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib
 import json
 import math
@@ -86,7 +91,39 @@ RC_EXTENSION_MODULE = "bl_ext.user_default.realcapture"
 #: The dev-package module that must never be substituted for the installed one.
 DEV_PACKAGE_MODULE = "addon"
 
-REPORT_SCHEMA = "realcapture-blender-start-proof/1"
+REPORT_SCHEMA = "realcapture-blender-start-proof/2"
+
+#: The exact configured catalog size the C4 proof is defined against: the
+#: full ARKit-52 vocabulary. C4 is specifically the installed default
+#: MediaPipe + ARKit-52 proof, so a truncated (or grown) installed catalog is
+#: a broken installation and can never ground a producer claim — not even an
+#: internally consistent ``live 1/1`` with every name observed.
+EXPECTED_CONFIGURED_CHANNELS = 52
+
+#: The minimum observed catalog matches for an honest C4 pass: the known
+#: MediaPipe contract is 51 of 52 (``tongueOut`` is never emitted, and
+#: ``_neutral`` is producer-only). A producer that degraded below this
+#: minimum is never green merely by being nonzero.
+MINIMUM_LIVE_CATALOG_MATCHES = 51
+
+#: Sentinel membership of the configured catalog: it must contain the ARKit
+#: ``tongueOut`` channel and must NOT contain MediaPipe's producer-only
+#: ``_neutral``. A 52-name count alone could pass a catalog patched to match
+#: a degraded producer, or one that absorbed a producer artifact into
+#: configuration; the sentinels pin the catalog to the actual ARKit-52
+#: vocabulary, not just its size.
+REQUIRED_CATALOG_SENTINEL = "tongueOut"
+FORBIDDEN_CATALOG_SENTINEL = "_neutral"
+
+#: Exact catalog identity: SHA-256 over the newline-joined, sorted, unique
+#: configured channel names (UTF-8), computed from the shipped
+#: ``addon/rigprofile/channels.py`` ARKIT_CHANNELS vocabulary. Count and
+#: sentinels alone still accept a same-size catalog that swaps a non-sentinel
+#: ARKit name for a fake one; the digest closes F1-F3 by pinning the exact
+#: installed configuration the C4 proof is defined against.
+EXPECTED_ARKIT_CATALOG_SHA256 = (
+    "9585d1b9cf3548ca579910ced33615ba60bbc60c592fd7136bafa87e7db725c7"
+)
 
 #: The dashboard's own light ids (backend/dashboard/status_model.py), in order.
 LIGHT_IDS = ("camera", "packets", "blender")
@@ -106,6 +143,41 @@ SHAPE_PREFIX = "rc_shape_"
 #: these can prove actual rig movement; controller/pose/meta values are
 #: diagnostics and can never green the movement gate by themselves.
 RIG_TARGET_PREFIX = "shapekey::"
+
+#: The exact real ARKit-52 vocabulary for the pure self-test, in canonical
+#: order (mirrors ``addon/rigprofile/channels.py``; the pytest suite pins the
+#: digest against the shipped module). Using the real names lets the healthy
+#: self-test report pass the exact-catalog digest guard, and the raw set has
+#: the exact shape of the live evidence: 51 observed names plus MediaPipe's
+#: extra ``_neutral`` (the honest 51/52 producer claim the verdict accepts).
+_SELF_TEST_CATALOG = (
+    # Eyes
+    "eyeBlinkLeft", "eyeLookDownLeft", "eyeLookInLeft", "eyeLookOutLeft",
+    "eyeLookUpLeft", "eyeSquintLeft", "eyeWideLeft",
+    "eyeBlinkRight", "eyeLookDownRight", "eyeLookInRight", "eyeLookOutRight",
+    "eyeLookUpRight", "eyeSquintRight", "eyeWideRight",
+    # Jaw
+    "jawForward", "jawLeft", "jawOpen", "jawRight",
+    # Mouth
+    "mouthClose", "mouthDimpleLeft", "mouthDimpleRight", "mouthFrownLeft",
+    "mouthFrownRight", "mouthFunnel", "mouthLeft", "mouthLowerDownLeft",
+    "mouthLowerDownRight", "mouthPressLeft", "mouthPressRight", "mouthPucker",
+    "mouthRight", "mouthRollLower", "mouthRollUpper", "mouthShrugLower",
+    "mouthShrugUpper", "mouthSmileLeft", "mouthSmileRight", "mouthStretchLeft",
+    "mouthStretchRight", "mouthUpperUpLeft", "mouthUpperUpRight",
+    # Nose
+    "noseSneerLeft", "noseSneerRight",
+    # Cheeks
+    "cheekPuff", "cheekSquintLeft", "cheekSquintRight",
+    # Brows
+    "browDownLeft", "browDownRight", "browInnerUp", "browOuterUpLeft",
+    "browOuterUpRight",
+    # Tongue
+    "tongueOut",
+)
+_SELF_TEST_RAW = tuple(
+    name for name in _SELF_TEST_CATALOG if name != "tongueOut"
+) + ("_neutral",)
 
 
 class ProofError(RuntimeError):
@@ -308,47 +380,75 @@ def wait_until(
         sleep(min(interval_s, max(0.0, deadline - now)))
 
 
-def coverage_wording(
-    configured_channels: int | None,
-    observed_live_channels: int | None,
-    target_sweep: dict | None = None,
-) -> dict:
-    """Honest coverage wording: measured live channels only.
+def _unique_sorted_names(names: object) -> list[str] | None:
+    """Sorted unique channel-name strings, or ``None`` if the input is malformed.
 
-    The producer claim is derived from what this run actually observed. The
-    catalog size (52) is configuration, not evidence; the historical 52/52
-    synthetic target sweep is separate evidence and never stands in for live
-    producer coverage.
+    Only collections of non-empty strings are channel names; anything else
+    (including a missing measurement) is malformed and can never ground a
+    coverage claim.
     """
-    result: dict = {
-        "configured_channels": configured_channels,
-        "observed_live_channels": observed_live_channels,
-        "producer_claim": None,
-        "target_sweep_separate": False,
-        "note": "",
-    }
-    if observed_live_channels is None:
-        result["note"] = (
-            "no live producer channel measurement exists for this run; the "
-            "channel catalog size is not evidence of live channels"
+    if not isinstance(names, (list, tuple, set, frozenset)):
+        return None
+    collected: list[str] = []
+    for name in names:
+        if not isinstance(name, str) or not name:
+            return None
+        collected.append(name)
+    return sorted(set(collected))
+
+
+def coverage_truth(
+    configured_names: object,
+    raw_observed_names: object,
+) -> dict:
+    """Honest producer coverage computed from channel NAMES, never counts.
+
+    ``configured_names`` is the exact installed catalog (``ARKIT_CHANNELS``);
+    ``raw_observed_names`` are the raw producer names this run observed live
+    (the ``rc_shape_`` names in the consumer's ``_last_values``). The helper
+    computes the intersection/difference itself, so a producer that emits an
+    extra name (MediaPipe's ``_neutral``) or omits one (``tongueOut``) is
+    reported as exactly what it is. Comparing ``len(raw)`` with
+    ``len(configured)`` is structurally impossible here: the claim is derived
+    from the catalog intersection only. The historical synthetic 52/52 target
+    sweep is separate task evidence and never stands in for live producer
+    coverage.
+    """
+    configured = _unique_sorted_names(configured_names)
+    raw = _unique_sorted_names(raw_observed_names)
+    catalog_set = set(configured or ())
+    raw_set = set(raw or ())
+    matched = sorted(catalog_set & raw_set)
+    unexpected = sorted(raw_set - catalog_set)
+    missing = sorted(catalog_set - raw_set)
+    if configured is None or raw is None:
+        claim = None
+        note = (
+            "malformed or unmeasured channel-name input; no producer coverage "
+            "can be claimed from this report"
         )
-        return result
-    result["producer_claim"] = (
-        f"live {observed_live_channels}/{configured_channels}"
-    )
-    if target_sweep is not None:
-        result["target_sweep_separate"] = True
-        result["note"] = (
-            "the synthetic 52/52 target sweep is separate evidence; this "
-            f"run's real producer coverage measured {observed_live_channels} "
-            "live channels"
-        )
+    elif not configured:
+        claim = None
+        note = "the configured channel catalog is empty; coverage cannot be claimed"
     else:
-        result["note"] = (
-            "producer coverage measured live in this run; no synthetic "
-            "target sweep is claimed by this run"
+        claim = f"live {len(matched)}/{len(configured)}"
+        note = (
+            "producer coverage measured live in this run from raw observed "
+            "channel names; no synthetic target sweep is claimed by this run"
         )
-    return result
+    note += " The historical synthetic 52/52 target sweep is separate task evidence."
+    return {
+        "configured_channels": len(configured) if configured is not None else None,
+        "configured_channel_names": configured,
+        "raw_observed_channels": len(raw) if raw is not None else None,
+        "raw_observed_channel_names": raw,
+        "observed_catalog_channels": len(matched),
+        "observed_catalog_channel_names": matched,
+        "unexpected_channel_names": unexpected,
+        "missing_configured_channel_names": missing,
+        "producer_claim": claim,
+        "note": note,
+    }
 
 
 def identity_failures(extension: dict) -> list[str]:
@@ -453,43 +553,121 @@ def live_failures(live: dict) -> list[str]:
     return failures
 
 
+COVERAGE_NAME_FIELDS = (
+    "configured_channel_names",
+    "raw_observed_channel_names",
+    "observed_catalog_channel_names",
+    "unexpected_channel_names",
+    "missing_configured_channel_names",
+)
+
+COVERAGE_COUNT_FIELDS = (
+    "configured_channels",
+    "raw_observed_channels",
+    "observed_catalog_channels",
+)
+
+
+def catalog_digest(configured_names: object) -> str | None:
+    """Deterministic SHA-256 over the sorted unique configured channel names.
+
+    The names are newline-joined (no trailing newline) and hashed as UTF-8.
+    Malformed input yields ``None``: absence is never a matching digest.
+    """
+    names = _unique_sorted_names(configured_names)
+    if names is None:
+        return None
+    return hashlib.sha256("\n".join(names).encode("utf-8")).hexdigest()
+
+
 def coverage_failures(coverage: dict) -> list[str]:
     """Failures for the coverage block: a measured, honest producer claim.
 
-    Zero observed channels is never green; the claim must match what this
-    run measured; and no synthetic target sweep is required or honored by
-    this run's verdict (the historical sweep is separate task evidence).
+    Every names list must exist, hold non-empty strings, and be duplicate
+    free; every count must be a real integer; and every derived field must
+    equal what the recorded names imply when recomputed — so an inflated
+    claim, an impossible partition, or an inconsistent count cannot pass.
+    Zero raw observations and zero catalog matches are never green, and the
+    historical synthetic target sweep is separate task evidence, never part
+    of this run's verdict.
     """
     failures: list[str] = []
-    configured = coverage.get("configured_channels")
-    observed = coverage.get("observed_live_channels")
-    if isinstance(configured, bool) or not isinstance(configured, int) or configured <= 0:
-        failures.append(f"the configured channel count is {configured!r}")
-        configured = None
-    if observed is None:
+    for field in COVERAGE_NAME_FIELDS:
+        names = coverage.get(field)
+        if not isinstance(names, list):
+            failures.append(f"coverage field {field!r} is absent or not a name list")
+        elif any(not isinstance(name, str) or not name for name in names):
+            failures.append(f"coverage field {field!r} contains a non-name entry")
+        elif len(set(names)) != len(names):
+            failures.append(f"coverage field {field!r} contains duplicate names")
+    for field in COVERAGE_COUNT_FIELDS:
+        value = coverage.get(field)
+        if isinstance(value, bool) or not isinstance(value, int):
+            failures.append(f"coverage field {field!r} is absent or not a count")
+    if failures:
+        return failures
+    # Every derived field must be exactly what the recorded names imply:
+    # an inflated claim, a wrong count, or an impossible partition shows up
+    # as an inconsistency, never as a judgement call.
+    recomputed = coverage_truth(
+        coverage["configured_channel_names"],
+        coverage["raw_observed_channel_names"],
+    )
+    for field, expected in recomputed.items():
+        if coverage.get(field) != expected:
+            failures.append(
+                f"coverage field {field!r} is inconsistent with the recorded "
+                f"channel names (recorded {coverage.get(field)!r}; derived "
+                f"{expected!r})"
+            )
+    if coverage["observed_catalog_channels"] == 0:
+        if coverage["raw_observed_channels"] == 0:
+            failures.append(
+                "zero live producer channels were observed by this run; a run "
+                "that observed no live channels is never green"
+            )
+        else:
+            failures.append(
+                "zero of the observed live producer names matched the "
+                "configured channel catalog; a catalog-blind run is never green"
+            )
+    elif coverage["observed_catalog_channels"] < MINIMUM_LIVE_CATALOG_MATCHES:
         failures.append(
-            "live producer channel coverage was never measured; absence is "
-            "never green and the catalog size is not evidence"
+            f"only {coverage['observed_catalog_channels']} of "
+            f"{coverage['configured_channels']} observed live producer names "
+            f"matched the configured catalog; the known honest minimum for the "
+            f"C4 MediaPipe contract is {MINIMUM_LIVE_CATALOG_MATCHES} of 52 "
+            "(tongueOut is never emitted); a degraded producer is never green "
+            "merely by being nonzero"
         )
-    elif isinstance(observed, bool) or not isinstance(observed, int) or observed < 0:
-        failures.append(f"the observed live channel count is {observed!r}")
-        observed = None
-    elif observed == 0:
+    if coverage["configured_channels"] != EXPECTED_CONFIGURED_CHANNELS:
         failures.append(
-            "zero live ARKit shape channels were observed by this run; a run "
-            "that observed no live channels is never green"
+            f"the configured channel catalog has "
+            f"{coverage['configured_channels']} names; the C4 proof is defined "
+            f"against exactly {EXPECTED_CONFIGURED_CHANNELS} names (the "
+            "ARKit-52 vocabulary); a truncated or grown catalog cannot ground "
+            "a producer claim"
         )
-    elif configured is not None and observed > configured:
+    if REQUIRED_CATALOG_SENTINEL not in coverage["configured_channel_names"]:
         failures.append(
-            f"observed live channels ({observed}) exceed the configured "
-            f"catalog ({configured}); that is not a possible measurement"
+            f"the configured channel catalog is missing "
+            f"{REQUIRED_CATALOG_SENTINEL!r}; a catalog without it is not the "
+            "ARKit-52 vocabulary even if it counts 52 names, and a count "
+            "patched to match a degraded producer cannot ground a claim"
         )
-    expected = coverage_wording(configured, observed)["producer_claim"]
-    if coverage.get("producer_claim") != expected:
+    if FORBIDDEN_CATALOG_SENTINEL in coverage["configured_channel_names"]:
         failures.append(
-            f"the producer claim {coverage.get('producer_claim')!r} does not "
-            f"match the measured coverage {expected!r}; the catalog size must "
-            "never inflate live coverage"
+            f"the configured channel catalog contains producer-only "
+            f"{FORBIDDEN_CATALOG_SENTINEL!r}; producer artifacts belong to the "
+            "raw observed names, never to the ARKit-52 configuration"
+        )
+    digest = catalog_digest(coverage["configured_channel_names"])
+    if digest != EXPECTED_ARKIT_CATALOG_SHA256:
+        failures.append(
+            f"the configured channel catalog digest is {digest!r}; the C4 "
+            f"proof requires the exact installed ARKit-52 vocabulary "
+            f"(digest {EXPECTED_ARKIT_CATALOG_SHA256!r}); a same-size catalog "
+            "with a swapped name is not this proof's configuration"
         )
     return failures
 
@@ -599,14 +777,63 @@ def self_test() -> list[str]:
     expect(not operator_finished("{'FINISHED'}"),
            "str(set) accepted as an operator result")
     expect(not operator_finished({"CANCELLED"}), "CANCELLED accepted as finished")
-    zero = {"configured_channels": 52, "observed_live_channels": 0,
-            "producer_claim": "live 0/52"}
+    catalog = list(_SELF_TEST_CATALOG)
+    raw = list(_SELF_TEST_RAW)
+    truth = coverage_truth(catalog, raw)
+    expect(truth["producer_claim"] == "live 51/52",
+           "honest 51/52 coverage claim broken")
+    expect(truth["unexpected_channel_names"] == ["_neutral"],
+           "the unexpected-name field is wrong")
+    expect(truth["missing_configured_channel_names"] == ["tongueOut"],
+           "the missing-name field is wrong")
+    expect(truth["raw_observed_channels"] == 52 and truth["observed_catalog_channels"] == 51,
+           "raw and catalog counts are conflated")
+    expect(not coverage_failures(truth), "honest 51/52 coverage failed the verdict")
+    zero = coverage_truth(catalog, [])
     expect(any("zero" in f for f in coverage_failures(zero)),
            "zero observed live channels was not a failure")
-    sweep_free = dict(_self_test_report()["coverage"])
-    sweep_free.pop("target_sweep_separate", None)
-    expect(not [f for f in coverage_failures(sweep_free) if "sweep" in f],
-           "the absence of a sweep claim failed the verdict")
+    blind = coverage_truth(catalog, ["_neutral", "notAChannel"])
+    expect(any("zero" in f for f in coverage_failures(blind)),
+           "zero catalog matches was not a failure")
+    inflated = dict(truth, producer_claim="live 52/52")
+    expect(coverage_failures(inflated), "an inflated producer claim was accepted")
+    partition = dict(truth, observed_catalog_channels=52)
+    expect(coverage_failures(partition), "an impossible partition was accepted")
+    duplicated = dict(truth, raw_observed_channel_names=raw + [raw[0]])
+    expect(any("duplicate" in f for f in coverage_failures(duplicated)),
+           "duplicate channel names were accepted")
+    truncated = coverage_truth(
+        ["jawOpen", "mouthPucker", "tongueOut"],
+        ["jawOpen", "mouthPucker", "tongueOut"],
+    )
+    expect(any("52" in f for f in coverage_failures(truncated)),
+           "a truncated configured catalog was accepted")
+    degraded = coverage_truth(
+        catalog, sorted(set(catalog) - {"tongueOut"})[:40] + ["_neutral"]
+    )
+    expect(any("51" in f for f in coverage_failures(degraded)),
+           "a producer degraded below the minimum was accepted")
+    full = coverage_truth(catalog, catalog)
+    expect(coverage_failures(full) == [],
+           "full 52/52 coverage failed the verdict")
+    expect(coverage_failures(truth) == [],
+           "the known honest 51/52 contract failed the verdict")
+    no_tongue = coverage_truth(
+        sorted((set(catalog) - {"tongueOut"}) | {"fakeBlink"}),
+        sorted((set(catalog) - {"tongueOut"}) | {"fakeBlink"})[:-1],
+    )
+    expect(any("tongueOut" in f for f in coverage_failures(no_tongue)),
+           "a tongueOut-less 52-name catalog was accepted")
+    neutral_config = sorted((set(catalog) - {catalog[0]}) | {"_neutral"})
+    polluted = coverage_truth(neutral_config, neutral_config)
+    expect(any("_neutral" in f for f in coverage_failures(polluted)),
+           "a _neutral-polluted 52-name catalog was accepted")
+    swapped = sorted((set(catalog) - {catalog[0]}) | {"fakeBlink"})
+    swapped_truth = coverage_truth(swapped, swapped)
+    expect(any("digest" in f for f in coverage_failures(swapped_truth)),
+           "a non-sentinel name swap passed exact catalog identity")
+    expect(catalog_digest(catalog) == EXPECTED_ARKIT_CATALOG_SHA256,
+           "the self-test catalog is not the exact ARKit-52 vocabulary")
     ok, elapsed = wait_until(
         lambda: True, 1.0, clock=lambda: 0.0, sleep=lambda _s: None
     )
@@ -622,9 +849,7 @@ def self_test() -> list[str]:
     )
     expect(window_moved(deviations), "a mid-window spike was not accumulated")
     expect(not window_moved({"a": 0.0}), "zero deviation counted as movement")
-    wording = coverage_wording(52, 51)
-    expect(wording["producer_claim"] == "live 51/52", "coverage claim inflated")
-    expect(coverage_wording(52, None)["producer_claim"] is None,
+    expect(coverage_truth(catalog, None)["producer_claim"] is None,
            "unmeasured coverage produced a claim")
     expect(evaluate_proof(_self_test_report()) == [], "healthy self-test report failed")
     mutated = _self_test_report()
@@ -662,11 +887,7 @@ def _self_test_report() -> dict:
                 "target_deviations": {"shapekey::jawOpen": 0.5},
             },
         },
-        "coverage": {
-            "configured_channels": 52,
-            "observed_live_channels": 52,
-            "producer_claim": "live 52/52",
-        },
+        "coverage": dict(coverage_truth(_SELF_TEST_CATALOG, _SELF_TEST_RAW)),
         "cleanup": {
             "capture_stopped": True,
             "backend_stop": {"stopped": True, "reason": "stopped"},
@@ -974,9 +1195,11 @@ def pump_consumer(duration_s: float) -> dict:
         key: value for key, value in deviations.items()
         if key.startswith(RIG_TARGET_PREFIX)
     }
-    # Observed live channels: the exact rc_shape_ keys the consumer wrote
-    # during THIS run (_last_values is cleared at _begin), never pre-existing
-    # controller props, pose keys, or metadata.
+    # Raw observed producer channel NAMES: the exact rc_shape_ keys the
+    # consumer wrote during THIS run (_last_values is cleared at _begin),
+    # never pre-existing controller props, pose keys, or metadata. These are
+    # raw names — coverage against the configured catalog is computed later
+    # by coverage_truth, never by comparing counts.
     observed_names = live_shape_channel_names(
         set(getattr(consumer, "_last_values", None) or ())
     )
@@ -1010,8 +1233,8 @@ def pump_consumer(duration_s: float) -> dict:
             "target_deviations": target_deviations,
             "final_changed": final_sample,
         },
-        "observed_live_channels": len(observed_names),
-        "observed_live_channel_names": observed_names,
+        "raw_observed_channels": len(observed_names),
+        "raw_observed_channel_names": observed_names,
     }
 
 
@@ -1328,23 +1551,27 @@ def run_proof(args: argparse.Namespace, report: dict) -> None:
         args.dashboard_port, timeout_s=args.backend_timeout
     )
 
-    # The configured catalog size comes from the exact installed module path,
+    # The configured catalog NAMES come from the exact installed module path,
     # imported via importlib; package-level attribute lookups are never used
     # because the installed package __init__ must not be trusted for this.
-    configured: int | None
+    configured_names: list[str] | None
     try:
         channels_module = importlib.import_module(
             f"{RC_EXTENSION_MODULE}.rigprofile.channels"
         )
         channels = getattr(channels_module, "ARKIT_CHANNELS", None)
-        configured = len(channels) if isinstance(channels, tuple) and channels else None
+        configured_names = (
+            [str(name) for name in channels]
+            if isinstance(channels, tuple) and channels else None
+        )
     except Exception:  # noqa: BLE001 - an unimportable catalog is a verdict failure
-        configured = None
-    # No synthetic target sweep is executed or claimed by this run: the
-    # historical 52/52 sweep is separate task evidence OUTSIDE this report,
-    # and its absence can never fail this run's verdict.
-    report["coverage"] = coverage_wording(
-        configured, report["live"].get("observed_live_channels")
+        configured_names = None
+    # Coverage is computed from NAMES: the exact installed catalog versus the
+    # raw producer names this run observed (consumer._last_values via the
+    # live block). A 52-name raw list with one extra name and one absent
+    # ARKit name reports live 51/52, never an inflated 52/52.
+    report["coverage"] = coverage_truth(
+        configured_names, report["live"].get("raw_observed_channel_names")
     )
 
 

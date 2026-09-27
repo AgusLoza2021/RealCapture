@@ -108,6 +108,21 @@ The capture also proves the addon's own exposure route works as predicted:
 `addon/consumer.py:129` writes every incoming shape name verbatim as the `rc_shape_<name>` custom
 property, so a capture needs no new instrumented code.
 
+### C4 cross-reference (2026-09-27 Start-proof run)
+
+The C4 installed-extension Start proof stored 52 raw produced shape-key names, which decompose as
+51 ARKit catalog names plus the extra `_neutral` — exactly the vocabulary recorded above. This
+independent run **confirms rather than supersedes** the capture: `tongueOut` remains absent from
+the producer vocabulary, and the honest producer claim is `live 51/52`. An earlier C4 summary that
+reported "52/52 live producer channels" was a raw-count vs catalog-size conflation and has been
+retracted; the harness (`tools/blender_start_proof.py`, report schema `/2`) now computes coverage
+from channel NAMES (`coverage_truth`) and enforces, with named constants: exact catalog identity
+by SHA-256 digest over the sorted configured names (`EXPECTED_ARKIT_CATALOG_SHA256`), a configured
+count of exactly 52, sentinel membership (`tongueOut` required; producer-only `_neutral`
+forbidden in configuration), a minimum of 51 live catalog matches, and zero-match fail-closed
+behavior. Rig bindings, rig targets, the dashboard heartbeat's 52 bound channels, and C3's
+synthetic 52/52 target sweep are separate facts and are not producer-vocabulary evidence.
+
 ### Why the capture was blocked for a day, and what it exposed
 
 The risk this document recorded as theoretical — "the emitted name set can change with no diff in

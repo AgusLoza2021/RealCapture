@@ -5,7 +5,8 @@ The harness (``tools/blender_start_proof.py``) has two layers:
 - a PURE verdict layer (importable without bpy) that decides, from the JSON
   report the runtime layer records, whether the C4 proof actually held: the
   installed extension identity, the backend child, the dashboard lights,
-  packet progression, real rig movement, honest coverage wording, and the
+  packet progression, real rig movement, honest coverage truth from raw
+  producer channel NAMES, and the
   cleanup truth (PID dead via an independent query, ports released);
 - a bpy runtime layer that only ever runs inside Blender.
 
@@ -26,6 +27,7 @@ from pathlib import Path
 
 import pytest
 
+from addon.rigprofile import channels as ch
 from tools import blender_start_proof as proof
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -98,13 +100,10 @@ def healthy_report() -> dict:
             },
             "controller_changed": {"rc_pose_rx": 0.2},  # diagnostics only
         },
-        "coverage": {
-            "configured_channels": 52,
-            "observed_live_channels": 52,
-            "producer_claim": "live 52/52",
-            # This run executes no synthetic target sweep and claims none:
-            # the historical 52/52 sweep is separate task evidence.
-        },
+        "coverage": proof.coverage_truth(ARKIT_CATALOG, RAW_OBSERVED),
+        # Honest 51/52: 51 ARKit matches + MediaPipe's `_neutral`, tongueOut
+        # absent. No synthetic target sweep is claimed by this run; the
+        # historical 52/52 sweep is separate task evidence.
         "cleanup": healthy_cleanup(),
     }
 
@@ -656,42 +655,29 @@ def test_dashboard_release_does_not_depend_on_connect_timeouts() -> None:
 # -- coverage wording: producer vs synthetic target sweep -------------------------------
 
 
-def test_configured_52_with_observed_51_cannot_claim_live_52_52() -> None:
-    wording = proof.coverage_wording(52, 51)
-    assert wording["producer_claim"] == "live 51/52"
-    assert wording["producer_claim"] != "live 52/52"
+def test_inflating_coverage_from_the_catalog_size_is_a_failure() -> None:
+    # The C4 false claim: 52 raw names (51 ARKit + _neutral) were reported as
+    # live 52/52 by comparing counts. The claim must equal what the recorded
+    # NAMES imply; the honest wording for the same names is accepted.
     report = healthy_report()
-    report["coverage"] = {
-        "configured_channels": 52,
-        "observed_live_channels": 51,
-        "producer_claim": "live 52/52",  # inflated from the catalog size
-    }
+    report["coverage"]["producer_claim"] = "live 52/52"
     failures = proof.evaluate_proof(report)
-    assert any("producer claim" in f for f in failures)
-    # The honest wording for the same measurement is accepted:
+    assert any("producer_claim" in f for f in failures), failures
     report["coverage"]["producer_claim"] = "live 51/52"
-    assert not [f for f in proof.evaluate_proof(report) if "coverage" in f.lower()
-                or "producer" in f or "sweep" in f]
+    assert proof.evaluate_proof(report) == []
 
 
 def test_never_measured_live_producer_cannot_claim_anything() -> None:
-    wording = proof.coverage_wording(52, None)
-    assert wording["producer_claim"] is None
-    assert "catalog" in wording["note"]
     report = healthy_report()
-    report["coverage"]["observed_live_channels"] = None
-    report["coverage"]["producer_claim"] = "live 52/52"
+    report["coverage"] = proof.coverage_truth(ARKIT_CATALOG, None)
+    assert report["coverage"]["producer_claim"] is None
     failures = proof.evaluate_proof(report)
-    assert any("never measured" in f for f in failures)
+    assert any("raw_observed" in f for f in failures)
 
 
 def test_zero_observed_live_channels_is_never_green() -> None:
     report = healthy_report()
-    report["coverage"] = {
-        "configured_channels": 52,
-        "observed_live_channels": 0,
-        "producer_claim": "live 0/52",  # even the honest wording is not enough
-    }
+    report["coverage"] = proof.coverage_truth(ARKIT_CATALOG, [])
     failures = proof.evaluate_proof(report)
     assert any("zero" in f.lower() for f in failures), (
         "a run that observed no live ARKit shape channels must never pass"
@@ -719,20 +705,291 @@ def test_observed_channels_must_be_data_this_consumer_run_wrote() -> None:
 def test_the_absence_of_a_sweep_claim_does_not_fail_c4() -> None:
     # This run executes no synthetic target sweep; the historical 52/52 sweep
     # is separate task evidence OUTSIDE this report. Absence of a sweep claim
-    # must not fail the verdict, and a false flag must not either: the sweep
-    # is simply not part of this run's contract.
+    # must not fail the verdict: the sweep is simply not part of this run's
+    # contract.
     report = healthy_report()
-    report["coverage"].pop("target_sweep_separate", None)
-    assert not [f for f in proof.evaluate_proof(report) if "sweep" in f.lower()]
-    report["coverage"]["target_sweep_separate"] = False
     assert not [f for f in proof.evaluate_proof(report) if "sweep" in f.lower()]
 
 
-def test_observed_live_channels_above_the_catalog_is_a_failure() -> None:
+def test_an_observed_catalog_count_above_the_catalog_is_a_failure() -> None:
+    # Only len(configured) names can ever match the catalog; a forged higher
+    # count is an impossible partition and must fail the full verdict.
     report = healthy_report()
-    report["coverage"]["observed_live_channels"] = 53
-    report["coverage"]["producer_claim"] = "live 53/52"
+    report["coverage"]["observed_catalog_channels"] = 53
     assert proof.evaluate_proof(report)
+
+
+# -- regression: the C4 coverage false claim (live 52/52 from 52 raw names) -------------
+#
+# Immutable live evidence (proof.json, %TEMP%/rc-start-proof-20260927-154632/):
+# the producer emitted 52 raw channel names = 51 of the 52 ARKit names
+# (tongueOut absent) plus MediaPipe's extra `_neutral`. The old helper compared
+# len(raw) with len(configured) and reported a false `live 52/52`. The new
+# coverage truth computes the intersection/difference from the NAMES themselves.
+
+ARKIT_CATALOG = list(ch.ARKIT_CHANNELS)
+RAW_OBSERVED = sorted((set(ARKIT_CATALOG) - {"tongueOut"}) | {"_neutral"})
+
+
+def test_report_schema_is_bumped_to_v2_for_the_new_coverage_semantics() -> None:
+    assert proof.REPORT_SCHEMA == "realcapture-blender-start-proof/2"
+
+
+def test_honest_51_of_52_producer_coverage_passes_the_full_proof() -> None:
+    report = healthy_report()
+    report["coverage"] = proof.coverage_truth(ARKIT_CATALOG, RAW_OBSERVED)
+    coverage = report["coverage"]
+    assert coverage["configured_channels"] == 52
+    assert coverage["raw_observed_channels"] == 52
+    assert coverage["raw_observed_channel_names"] == RAW_OBSERVED
+    assert coverage["observed_catalog_channels"] == 51
+    assert coverage["unexpected_channel_names"] == ["_neutral"]
+    assert coverage["missing_configured_channel_names"] == ["tongueOut"]
+    assert coverage["producer_claim"] == "live 51/52"
+    assert proof.evaluate_proof(report) == [], proof.evaluate_proof(report)
+
+
+def test_raw_count_equal_to_catalog_count_is_never_coverage() -> None:
+    # 52 raw names (51 catalog matches + _neutral) must never read as live
+    # 52/52: coverage is the name intersection, never len(raw) vs len(configured).
+    truth = proof.coverage_truth(ARKIT_CATALOG, RAW_OBSERVED)
+    assert truth["producer_claim"] != "live 52/52"
+    assert truth["observed_catalog_channels"] == 51
+
+
+def test_zero_catalog_matches_fail_closed() -> None:
+    truth = proof.coverage_truth(ARKIT_CATALOG, ["_neutral", "unknownFace"])
+    failures = proof.coverage_failures(truth)
+    assert any("zero" in f.lower() for f in failures), failures
+
+
+def test_zero_observed_raw_names_fail_closed() -> None:
+    truth = proof.coverage_truth(ARKIT_CATALOG, [])
+    failures = proof.coverage_failures(truth)
+    assert any("zero" in f.lower() for f in failures), failures
+
+
+def test_inflated_producer_claim_fails() -> None:
+    truth = proof.coverage_truth(ARKIT_CATALOG, RAW_OBSERVED)
+    truth["producer_claim"] = "live 52/52"
+    failures = proof.coverage_failures(truth)
+    assert failures, "an inflated producer claim was accepted"
+
+
+def test_impossible_partition_fails() -> None:
+    truth = proof.coverage_truth(ARKIT_CATALOG, RAW_OBSERVED)
+    truth["observed_catalog_channels"] = 52  # only 51 names can match
+    assert proof.coverage_failures(truth)
+    truth["missing_configured_channel_names"] = []  # tongueOut cannot return
+    assert proof.coverage_failures(truth)
+
+
+def test_duplicate_or_non_name_entries_fail() -> None:
+    truth = proof.coverage_truth(ARKIT_CATALOG, RAW_OBSERVED)
+    truth["raw_observed_channel_names"] = RAW_OBSERVED + ["jawOpen"]
+    assert any("duplicate" in f for f in proof.coverage_failures(truth))
+    truth["raw_observed_channel_names"] = ["jawOpen", 42]
+    assert any("non-name" in f or "malformed" in f or "not a name" in f
+               for f in proof.coverage_failures(truth))
+
+
+def test_malformed_counts_fail() -> None:
+    truth = proof.coverage_truth(ARKIT_CATALOG, RAW_OBSERVED)
+    for field in ("configured_channels", "raw_observed_channels",
+                  "observed_catalog_channels"):
+        broken = dict(truth)
+        broken[field] = None
+        assert any(field in f for f in proof.coverage_failures(broken)), field
+        broken = dict(truth)
+        broken[field] = True  # a bool is never a count
+        assert any(field in f for f in proof.coverage_failures(broken)), field
+
+
+def test_unmeasured_catalog_or_names_cannot_claim_coverage() -> None:
+    # An unimportable catalog and an unmeasured live run must both fail the
+    # verdict instead of silently claiming anything.
+    unmeasured = proof.coverage_truth(ARKIT_CATALOG, None)
+    assert unmeasured["producer_claim"] is None
+    assert proof.coverage_failures(unmeasured)
+    no_catalog = proof.coverage_truth(None, RAW_OBSERVED)
+    assert no_catalog["producer_claim"] is None
+    assert proof.coverage_failures(no_catalog)
+
+
+def test_the_live_report_carries_raw_names_and_run_proof_feeds_the_catalog() -> None:
+    # Semantics guard: the live block records RAW producer names (never
+    # `observed_live_*`, which conflated raw with catalog coverage), and
+    # run_proof passes the exact installed ARKIT_CHANNELS plus those raw
+    # names into coverage_truth.
+    source = MODULE_PATH.read_text(encoding="utf-8")
+    assert '"raw_observed_channel_names"' in source
+    assert '"raw_observed_channels"' in source
+    assert '"observed_live_channels"' not in source
+    assert '"observed_live_channel_names"' not in source
+    tree = ast.parse(source)
+    run_proof = next(
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "run_proof"
+    )
+    body = ast.get_source_segment(source, run_proof) or ""
+    assert "coverage_truth(" in body
+    assert "ARKIT_CHANNELS" in body
+    assert "raw_observed_channel_names" in body
+
+
+# -- regression: truncated catalogs and degraded producers must fail C4 -----------------
+#
+# C4 is specifically the installed default MediaPipe + ARKit-52 proof. The
+# catalog-size check above catches a missing count, but a TRUNCATED installed
+# catalog (e.g. one channel) would previously pass as `live 1/1`, and a
+# producer degraded to 1 catalog match would pass merely by being nonzero.
+
+
+def test_named_constants_pin_the_catalog_and_minimum() -> None:
+    assert proof.EXPECTED_CONFIGURED_CHANNELS == 52
+    assert proof.MINIMUM_LIVE_CATALOG_MATCHES == 51
+
+
+def test_a_truncated_configured_catalog_fails_even_when_fully_observed() -> None:
+    # Three unique configured names (tongueOut included, no _neutral), all
+    # observed: internally consistent, yet not the ARKit-52 proof.
+    truncated = ["jawOpen", "mouthPucker", "tongueOut"]
+    truth = proof.coverage_truth(truncated, truncated)
+    assert truth["producer_claim"] == "live 3/3"  # consistent, but not C4
+    failures = proof.coverage_failures(truth)
+    assert any("52" in f for f in failures), failures
+    report = healthy_report()
+    report["coverage"] = truth
+    assert proof.evaluate_proof(report), "a truncated catalog passed the verdict"
+
+
+def test_a_grown_configured_catalog_fails_even_when_fully_observed() -> None:
+    grown = ARKIT_CATALOG + ["futureChannel"]
+    truth = proof.coverage_truth(grown, grown)
+    failures = proof.coverage_failures(truth)
+    assert any("52" in f for f in failures), failures
+    report = healthy_report()
+    report["coverage"] = truth
+    assert proof.evaluate_proof(report)
+
+
+def test_a_producer_degraded_below_51_catalog_matches_fails() -> None:
+    degraded_raw = sorted(set(ARKIT_CATALOG) - {"tongueOut"})[:40] + ["_neutral"]
+    truth = proof.coverage_truth(ARKIT_CATALOG, degraded_raw)
+    assert truth["observed_catalog_channels"] == 40  # nonzero, still not enough
+    failures = proof.coverage_failures(truth)
+    assert any("51" in f for f in failures), failures
+    report = healthy_report()
+    report["coverage"] = truth
+    assert proof.evaluate_proof(report), "a degraded producer passed the verdict"
+
+
+def test_the_known_media_pipe_contract_51_of_52_passes() -> None:
+    # The exact live evidence: 51 ARKit matches + _neutral, tongueOut absent.
+    truth = proof.coverage_truth(ARKIT_CATALOG, RAW_OBSERVED)
+    assert proof.coverage_failures(truth) == []
+
+
+def test_full_52_of_52_would_pass_if_future_media_pipe_emits_tongue_out() -> None:
+    truth = proof.coverage_truth(ARKIT_CATALOG, ARKIT_CATALOG)
+    assert truth["producer_claim"] == "live 52/52"
+    assert truth["unexpected_channel_names"] == []
+    assert proof.coverage_failures(truth) == []
+
+
+# -- regression: the configured catalog must carry the ARKit sentinels ------------------
+#
+# A count of exactly 52 is necessary but not sufficient: a catalog that lost
+# `tongueOut` (e.g. patched to match a degraded producer) or absorbed the
+# producer-only `_neutral` into configuration would still count 52 and pass.
+
+
+def test_catalog_sentinel_constants_are_named() -> None:
+    assert proof.REQUIRED_CATALOG_SENTINEL == "tongueOut"
+    assert proof.FORBIDDEN_CATALOG_SENTINEL == "_neutral"
+
+
+def test_the_real_catalog_fixture_carries_the_sentinels() -> None:
+    assert "tongueOut" in ARKIT_CATALOG
+    assert "_neutral" not in ARKIT_CATALOG
+
+
+def test_a_52_name_catalog_missing_tongue_out_fails_even_when_consistent() -> None:
+    # 52 unique configured names, tongueOut absent, _neutral absent, 51 of
+    # them observed: internally consistent, still not the ARKit-52 catalog.
+    configured = sorted((set(ARKIT_CATALOG) - {"tongueOut"}) | {"fakeBlink"})
+    assert len(configured) == 52 and "tongueOut" not in configured
+    truth = proof.coverage_truth(configured, sorted(set(configured) - {"fakeBlink"}))
+    assert truth["producer_claim"] == "live 51/52"  # consistent, still wrong
+    failures = proof.coverage_failures(truth)
+    assert any("tongueOut" in f for f in failures), failures
+    report = healthy_report()
+    report["coverage"] = truth
+    assert proof.evaluate_proof(report), "a tongueOut-less catalog passed"
+
+
+def test_a_52_name_catalog_containing_neutral_fails_even_when_consistent() -> None:
+    # 52 unique configured names including producer-only _neutral, all
+    # observed: internally consistent, but configuration absorbed a producer
+    # artifact instead of the ARKit vocabulary.
+    configured = sorted((set(ARKIT_CATALOG) - {"mouthPucker"}) | {"_neutral"})
+    assert len(configured) == 52 and "_neutral" in configured
+    truth = proof.coverage_truth(configured, configured)
+    assert truth["producer_claim"] == "live 52/52"  # consistent, still wrong
+    failures = proof.coverage_failures(truth)
+    assert any("_neutral" in f for f in failures), failures
+    report = healthy_report()
+    report["coverage"] = truth
+    assert proof.evaluate_proof(report), "a _neutral-polluted catalog passed"
+
+
+def test_the_healthy_real_catalog_still_passes_at_honest_51_52() -> None:
+    truth = proof.coverage_truth(ARKIT_CATALOG, RAW_OBSERVED)
+    assert proof.coverage_failures(truth) == []
+
+
+# -- regression: exact catalog identity via a deterministic digest ----------------------
+#
+# Count + sentinels still allow a same-size catalog that swaps a non-sentinel
+# ARKit name for a fake one. F1-F3 close that: the configured names must hash
+# to the exact installed ARKit-52 vocabulary.
+
+
+def test_the_actual_arkit_catalog_digest_equals_the_named_constant() -> None:
+    assert proof.catalog_digest(ARKIT_CATALOG) == (
+        proof.EXPECTED_ARKIT_CATALOG_SHA256)
+
+
+def test_the_digest_is_deterministic_order_insensitive_and_discriminating() -> None:
+    digest = proof.catalog_digest(ARKIT_CATALOG)
+    assert digest == proof.catalog_digest(list(reversed(ARKIT_CATALOG)))
+    assert digest != proof.catalog_digest(ARKIT_CATALOG[:-1] + ["fakeBlink"])
+    assert proof.catalog_digest(None) is None  # malformed input, never a digest
+
+
+def test_a_non_sentinel_name_swap_fails_by_exact_catalog_identity() -> None:
+    # 52 unique names, tongueOut present, no _neutral, all 52 observed:
+    # every previous check passes, yet the catalog is not ARKit-52.
+    swapped = sorted(set(ARKIT_CATALOG) - {"jawOpen"} | {"jawOpenFake"})
+    assert len(swapped) == 52 and "tongueOut" in swapped
+    assert "_neutral" not in swapped
+    truth = proof.coverage_truth(swapped, swapped)
+    assert truth["producer_claim"] == "live 52/52"  # consistent, still wrong
+    failures = proof.coverage_failures(truth)
+    assert any("digest" in f for f in failures), failures
+    report = healthy_report()
+    report["coverage"] = truth
+    assert proof.evaluate_proof(report), "a swapped-name catalog passed"
+
+
+def test_count_and_sentinel_diagnostics_still_fire_alongside_the_digest() -> None:
+    # The digest is the identity check; the readable diagnostics remain.
+    polluted = sorted((set(ARKIT_CATALOG) - {"jawOpen"}) | {"_neutral"})
+    truth = proof.coverage_truth(polluted, polluted)
+    failures = proof.coverage_failures(truth)
+    assert any("digest" in f for f in failures)
+    assert any("_neutral" in f for f in failures)
+    assert any("52" in f for f in failures)
 
 
 # -- module hygiene: bpy stays lazy -----------------------------------------------------
