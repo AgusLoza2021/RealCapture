@@ -321,11 +321,11 @@ here: the three new `bl_idname`s exist and are unique, every pre-existing
 with `try`/`except`, and `__init__.register` registers `preferences` before
 `ui`).
 
-### P5 - docs and the README pin
+### P5 - docs and the README pin (done)
 
 `docs/install-blender-addon.md`, the README pointer, and the test-count pin.
 
-### P6 - the parent's end-to-end proof
+### P6 - the parent's end-to-end proof (done)
 
 Build the zip, install it into an isolated extensions directory, then a
 headless Blender run: start through the addon's own code path, observe the
@@ -410,6 +410,31 @@ the child gone. Then the owner's own test with a real face.
   `test_no_staticmethod_uses_self`.
 - Canonical suite after the README pin moved 479 -> 524: `524 passed,
   1 warning`.
+
+- P5: `docs/install-blender-addon.md`, a README section, and the layout row.
+  The document states what was verified here (the build command, the CLI
+  install path, the six preference fields, every refusal) and labels the one
+  thing it did not click through: the UI menu entry, whose label is given as
+  "Install from Disk" without claiming a tested click path.
+- P6, run in headless Blender 4.5.2 against the built zip installed into an
+  isolated extensions directory, driving the add-on's own operator:
+  - `bpy.ops.realcapture.start_backend()` -> `{'FINISHED'}`, child pid 55600,
+    `started is True`, reason `backend started (pid 55600); dashboard port 8781
+    was checked` - the port really was probed, and it was free.
+  - an independent `tasklist /FI "PID eq 55600"` sees the pid, and the log grows
+    with `Camera 0 opened; capture loop running at <=30 fps` plus the TensorFlow
+    Lite delegate lines, so the child really captured.
+  - the dashboard was polled on the port the panel claims; the lights moved red
+    to green for camera and packets within 4.5 s, with Blender honestly red
+    (`no heartbeat has ever arrived from the Blender addon`).
+  - the panel's own draw body rendered inside Blender: `Backend: green`,
+    `Camera: green`, `Packets to Blender: green`, `Blender rig: red` with its
+    reason and `snapshot age 0.2 s`.
+  - stop -> the child is gone, an independent `tasklist` agrees, `_process` and
+    `_poller` are both None, and `INVALID_TIME_INTERVAL_COUNT` is 0.
+  - a probe crash left the child running, and quitting Blender removed it
+    (`unregister` stops the child): the no-leak rule observed, not argued.
+- Canonical suite at the end of the plugin work: `524 passed, 1 warning`.
 
 ## Open questions
 
