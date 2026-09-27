@@ -223,7 +223,7 @@ can render live data with the age of the data it is still showing;
 `fetched_at == 0.0` means "no successful read yet" and must never be rendered
 as an age.
 
-### P4 - the cockpit: `addon/preferences.py`, `addon/ui.py`, `addon/__init__.py`
+### P4 - the cockpit: `addon/preferences.py`, `addon/ui.py`, `addon/__init__.py` (done)
 
 Preferences, the new panel section (start / stop / open Control Room, the three
 lights with their reasons and states as text as well as colour), the background
@@ -232,6 +232,94 @@ poller thread plus the `bpy.app.timers` tick, stop-on-unregister, and the
 
 Depends on P2 and P3: the UI is the thin layer, never the place where process
 handling or threshold logic lives.
+
+**Measured against this machine's Blender before writing the interface:**
+
+- `bpy.ops.wm.url_open` exists -> the Control Room button needs no browser
+  probing code.
+- `bpy.app.timers` exists -> the redraw tick is a timer, not a thread touching
+  the UI.
+- The preferences key for an installed extension is the FULL module path:
+  after `addon_enable`, `bpy.context.preferences.addons` holds
+  `bl_ext.user_default.realcapture`, and its `.preferences` is `None` while no
+  `AddonPreferences` class is registered. So `bl_idname = __package__` is the
+  correct idiom in both modes (dev `addon`, installed
+  `bl_ext.user_default.realcapture`), and the panel must draw a sane section
+  when `.preferences` is `None` instead of raising.
+
+**Frozen interface.** A new pure module `addon/cockpit.py` (stdlib only, no
+`bpy`, imports `backend_process` and `dashboard_client`) owns every decision;
+`addon/ui.py` only draws. `addon/preferences.py` holds the `AddonPreferences`
+class and nothing else.
+
+`addon/cockpit.py`:
+
+- Constants `DEFAULT_PYTHON_RELATIVE = "backend/.venv/Scripts/python.exe"`,
+  `DEFAULT_SCRIPT_RELATIVE = "backend/run_capture.py"`, `DEFAULT_UDP_PORT =
+  11111`, `DEFAULT_DASHBOARD_PORT = 8765`, `DEFAULT_CAMERA_INDEX = 0`.
+- `class CockpitError(ValueError)`.
+- `@dataclass(frozen=True) class PipelineSettings` with `repo_root: str`,
+  `python_executable: str = ""` (empty means "derive it"), `udp_port: int =
+  DEFAULT_UDP_PORT`, `dashboard_port: int = DEFAULT_DASHBOARD_PORT`,
+  `camera_index: int = DEFAULT_CAMERA_INDEX`, `open_browser_on_start: bool =
+  False`; methods `paths() -> BackendPaths` and `argv() -> list[str]` that
+  delegate to `backend_process`, so the panel never builds a command line.
+- `settings_from_preferences(prefs: Any, *, scene_udp_port: int | None = None)
+  -> PipelineSettings`: reads the six preference fields (missing attributes are
+  a `CockpitError` naming the attribute, never a silent default); an empty
+  `repo_root` refuses naming the preference field; and when `scene_udp_port` is
+  not `None` and differs from the preference, it REFUSES naming BOTH values
+  (rule 2), because the addon's UDP consumer and the backend must agree.
+- `HealthRow = NamedTuple(state, label, detail, icon)` with `state` one of
+  `"green" | "yellow" | "red" | "unknown"`; `light_icon(state)` maps that to a
+  Blender icon name (`CHECKMARK`, `ERROR`, `QUESTION`).
+- `child_rows(process: BackendProcess | None) -> tuple[HealthRow, ...]`: one
+  row, label `Backend`, state green while `is_alive()`, red otherwise, detail
+  the process `reason` verbatim (so `exited immediately (exit code 3); see the
+  log: <path>` reaches the user), empty state `unknown` with "not started" when
+  there is no process.
+- `connection_rows(snapshot: Snapshot, *, now_s: float) -> tuple[HealthRow,
+  ...]`: the dashboard's own `connections` array, verbatim, one row each,
+  `label` = the dashboard's `label`, `detail` = its `reason`; every row also
+  carries the AGE of the snapshot. An empty array with an `error` renders ONE
+  red row naming the error; an empty array with no error renders ONE unknown
+  row saying the dashboard reported no connections. Absence is never green
+  (rule 9).
+- `next_tick_interval(poller_alive: bool) -> float | None`: `None` stops the
+  timer; otherwise the redraw interval, so the timer's own decision is pure and
+  testable.
+
+`addon/preferences.py`: `class RealCapturePreferences(bpy.types.AddonPreferences)`
+with `bl_idname = __package__`, fields exactly `repo_root: StringProperty`,
+`python_executable: StringProperty`, `udp_port: IntProperty(11111)`,
+`dashboard_port: IntProperty(8765)`, `camera_index: IntProperty(0)`,
+`open_browser_on_start: BoolProperty(False)`, and
+`register()`/`unregister()`.
+
+`addon/ui.py`: `RC_OT_start_backend` (`realcapture.start_backend`),
+`RC_OT_stop_backend` (`realcapture.stop_backend`), `RC_OT_open_control_room`
+(`realcapture.open_control_room`), a `Pipeline` box added to
+`RC_PT_main_panel.draw` with the three buttons and the rendered
+`HealthRow` labels with their icons, a module-level `_process` / `_poller`, a
+`_tick` timer callback that is exception-safe (Blender silently unregisters a
+raising timer and the panel freezes) and returns
+`cockpit.next_tick_interval(...)`, and a `register()`/`unregister()` pair that
+starts and removes the timer. `unregister()` stops the poller and stops the
+child this addon started (rule 11). Starting twice must report
+"already running (pid N)" instead of starting a second child. Nothing on the
+main thread performs network I/O (rule 8).
+
+`addon/__init__.py`: register `properties`, then `preferences` (before `ui`,
+which reads them), then `wizard`, then `ui`; unregister in reverse. The
+`bl_info` dict is untouched.
+
+Gates: `tests/test_cockpit.py` (pure: the refusal naming both ports, the
+verbatim rows, the age text, the offline/unknown rows, the tick interval) and
+`tests/test_plugin_wiring.py` (structural, because `bpy` cannot be imported
+here: the three new `bl_idname`s exist and are unique, every pre-existing
+`bl_idname` is preserved, `unregister` stops the child, `_tick` guards itself
+with `try`/`except`, and `__init__.register` registers `preferences` before
+`ui`).
 
 ### P5 - docs and the README pin
 
@@ -275,6 +363,53 @@ the child gone. Then the owner's own test with a real face.
     immediately (exit code 3); see the log: <log_path>`.
   - Canonical suite after the README pin moved 410 -> 479: `479 passed,
     1 warning`.
+
+- P4: delivered by a worker (two new modules, two test files, the wired panel),
+  then read line by line by the parent, which found four real defects:
+  - D3: the stop operator cleared `_process` even when the stop FAILED, so the
+    panel would have reported "not started" while the child was still alive.
+    Fixed with the pure `cockpit.stop_clears_state(result)`.
+  - D4: `_ensure_poller` ignored a `dashboard_port` change, so the poller kept
+    reading the old port - stale by construction. Fixed with the pure
+    `cockpit.needs_new_poller(current_port, wanted_port)`.
+  - D8: `RealCapturePreferences` had no `draw()`, so the class was invisible in
+    Blender's UI and the owner could not set `repo_root` - a blocker for "run it
+    from Blender". Fixed by rendering all six fields.
+  - D9 (found only by RUNNING the panel): `_draw_pipeline` was decorated
+    `@staticmethod` while its body called `self._draw_health_row(...)`, so the
+    first draw by a human raised `NameError`. pytest never draws, so no test
+    could see it. Fixed by dropping the decorator, and closed as a class with a
+    structural gate (`test_no_staticmethod_uses_self`) that rejects any
+    `@staticmethod` whose body reads `self`.
+- P4 live evidence, from the installed extension in Blender 4.5.2 (isolated
+  `BLENDER_USER_EXTENSIONS`), not from pytest:
+  - `addon_enable` -> `{'FINISHED'}`; preferences present with all six fields
+    and their defaults (`''`, `11111`, `8765`, `0`, `False`); `draw` present.
+  - the four operators exist and the pre-existing `start_capture` survives.
+  - `bpy.app.timers.is_registered(ui._tick)` is True after enable and False
+    after disable; `_poller`, `_poller_port` and `_process` are all cleared by
+    `unregister`, with no poller thread left alive.
+  - the poller is reused on the same port, rebuilt on a port change, and the
+    rebuilt-away poller is stopped (`is_alive()` False).
+  - three refusals reach the user as an error report naming the offender: the
+    scene/preference port disagreement (both values), an empty `repo_root`, and
+    a `repo_root` that does not exist; a stop with nothing started returns
+    `{'CANCELLED'}`.
+  - the panel body was rendered through Blender's own code path with a
+    recording layout, for four states: nothing started ("Dashboard: not
+    polling", "Backend: unknown / not started"), a retained green row
+    downgraded to yellow while `snapshot.error` is set, a healthy row, and a
+    dashboard that never answered ("Dashboard: red / timeout after 1.5 s" -
+    absence is never green).
+- P4 mutations, each breaking exactly one gate and each restored
+  byte-identically: `stop_clears_state` always clearing ->
+  `test_stop_clears_state_only_after_a_real_stop`; `needs_new_poller` ignoring
+  the port -> `test_needs_new_poller`; `draw()` dropping `repo_root` -> the
+  frozen-field gate; the stop operator clearing `_process` unconditionally ->
+  `test_stop_operator_obeys_the_pure_decision`; the `@staticmethod` restored ->
+  `test_no_staticmethod_uses_self`.
+- Canonical suite after the README pin moved 479 -> 524: `524 passed,
+  1 warning`.
 
 ## Open questions
 
