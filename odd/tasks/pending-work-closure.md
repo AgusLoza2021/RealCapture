@@ -24,7 +24,7 @@ The implementation is substantially complete but is split across local-only bran
 - RealCapture has no repository Issue Forms or PR templates. The issue-first PR skill cannot be satisfied without inventing policy, so publication uses verified direct integration rather than a nonconforming PR.
 - The Telegram bridge has competing fixes: PR #4 removes PT5M repetition; local `feat/voice-transcription` keeps PT5M and makes the hidden launcher wait so `IgnoreNew` absorbs retries. One semantic model must win.
 - No false green: every live check must distinguish absence, reuse, stale data, and actual success.
-- The existing MPFB2 asset under `%LOCALAPPDATA%/Temp/rc_mpfb` is the first real rig because it is already installed and previously proved 52/52 shape-key movement.
+- The existing local MPFB2 environment is the first real rig because it is already installed and previously proved 52/52 shape-key movement; its machine-specific path remains outside tracked files.
 - `gentle-engram` updates only after Blender, backend, broker, and verification work are quiet.
 
 ## Verification mode
