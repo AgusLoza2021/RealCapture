@@ -105,7 +105,9 @@ class TestLauncherContract:
         assert "127.0.0.1" in text.lower() or "antivirus" in text.lower(), (
             "the failure message must name the likely causes"
         )
-        assert "taskkill" in text, "every exit path must kill the capture process tree"
+        assert "call :stop_capture" in text, (
+            "every exit path must stop the recorded capture PID"
+        )
 
 
 class TestDocContract:
