@@ -42,9 +42,9 @@ The implementation is substantially complete but is split across local-only bran
 
 ## Tasks
 
-- [ ] C1 — Verify, publish, and integrate `blender-native-plugin`.
+- [x] C1 — Verify, publish, and integrate `blender-native-plugin`.
   - Route: delegated verification (`gentle-ai-verify`); publication/integration inline Git operations.
-  - Acceptance: canonical suite passes; Blender extension builds and validates; feature branch is pushed; `main` contains `7a55a05` plus this closure record; origin readback matches.
+  - Evidence: `524 passed, 1 warning`; extension build exit 0 (`realcapture-0.1.0.zip`, 61151 bytes); Blender validator exit 0; `blender-native-plugin` and `main` both published at `6b470e5417f60a4cf0ffde3f9ab85e12da534468` with matching remote readback. Native committed-range review was unavailable (`schema-incompatible`, `lineage_created: false`), so the high-risk fallback used the independent verifier.
 - [ ] C2 — Rebase, verify, publish, and integrate `phase2/weight-zones`.
   - Route: delegated verification; rebase/integration inline Git operations.
   - Acceptance: five work units remain intact, conflicts are resolved without dropping the dashboard refusal fix, canonical suite passes, branch and `main` are pushed.
@@ -69,9 +69,11 @@ The implementation is substantially complete but is split across local-only bran
 
 ## Progress
 
-- Mapping completed: `blender-native-plugin` is 10 commits ahead of `origin/main`; `phase2/weight-zones` is 5 independent commits ahead; bridge PR #4 is open while local `feat/voice-transcription` implements a competing PT5M/IgnoreNew strategy.
+- C1 closed: the plugin branch and `main` are published at `6b470e5417f60a4cf0ffde3f9ab85e12da534468`; independent verification observed 524 tests, a successful extension build, and a successful Blender validator run.
+- `phase2/weight-zones` remains five independent commits from the old `a4bc300` base and must be rebased onto published `main` without losing its dashboard refusal fix.
+- Bridge PR #4 is open while local `feat/voice-transcription` implements a competing PT5M/IgnoreNew strategy.
 - Owner authorization received: "Dale, encargate de resolver todo eso."
 
 ## Next step
 
-Run C1 verification, then publish and integrate the Blender plugin branch.
+Rebase and verify `phase2/weight-zones` for C2.
