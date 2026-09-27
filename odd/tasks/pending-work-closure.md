@@ -47,9 +47,9 @@ The RealCapture implementation and its two completed feature branches are publis
 - [x] C3 — Live-test and harden `control-room.cmd` and `camera-to-rig.cmd`.
   - Route: delegated writer plus independent external/runtime verification.
   - Evidence: 591 tests pass; both launchers capture and validate an owned wrapper PID plus immutable start time before child-first cleanup. `control-room.cmd` proved API status, complete JPEG/MJPEG frames, advancing packets, truthful lights, exit 0, and cleanup without killing the co-hosted Windows Terminal. `camera-to-rig.cmd` proved the real MPFB2 character, a 52/52 target sweep, live packets 18→1044, honest shape-key-only rest-gate fallback, exact-PID Blender fallback close, and owned-tree cleanup. Deterministic drills proved malformed ownership exits 6 before Blender/backend and a refused stop exits 7 without printing false success; the remaining tree was then cleaned only by validated PID identity.
-- [ ] C4 — Live-test Blender Start with the existing MPFB2 rig.
-  - Route: delegated external/runtime verification.
-  - Acceptance: the installed extension starts its own child, MPFB2 loads, 52/52 sweep remains live, dashboard lights are truthful, and all children are cleaned up.
+- [x] C4 — Live-test Blender Start with the existing MPFB2 rig.
+  - Route: delegated harness implementation, independent semantic verification, and one exclusive live camera/Blender run.
+  - Evidence: the installed `bl_ext.user_default.realcapture` extension started backend PID 18672 against a disposable copy of the MPFB2 character. It bound 52 shape channels, applied 332 real MediaPipe packets, observed 52/52 live producer channels, moved actual driven shape keys (peak `mouthPucker=0.9322`), and changed all three dashboard lights from truthful initial red to final green. Stop Capture and Stop Backend both finished; extension state cleared, the child PID disappeared, UDP 11111 and TCP 8765 were independently rebound, and the baseline Windows Terminal PID survived. The separate C3 synthetic sweep remains separate evidence rather than being relabeled as live producer coverage. Evidence: `C:/Users/Lozita/AppData/Local/Temp/rc-start-proof-20260927-154632/`; focused harness tests: 47 passed; canonical suite: 638 passed, 1 third-party warning.
 - [ ] C5 — Close the remaining technical decisions.
   - Route: inline synthesis from verified evidence.
   - Acceptance: MPFB2/shape-key-first rig path and reversible weight-zone policy are recorded; M1's 30-minute stall and post-inference latency blind spot remain explicitly open unless newly measured.
@@ -63,8 +63,10 @@ The RealCapture implementation and its two completed feature branches are publis
 - The same live run exposed a candidate-caused safety defect: Windows Terminal co-hosted the named capture console, so `taskkill /FI "WINDOWTITLE eq ..." /T /F` terminated the shared `WindowsTerminal.exe` process and collateral terminal tabs.
 - PID-ownership fix closed: normal exit 0 paths and deterministic exits 6/7 were observed live; the original Windows Terminal PID and start time survived every run, and no cleanup uses window titles or broad image matching.
 - Five parallel subagents mapped the next work: installed-extension Start proof, camera-to-rig harness, M1 evidence gaps, rig/weight policy, and repo/ZIP/install synchronization. The installed extension is byte-identical to the current packaged add-on except that the post-package pure `rigprofile/weights.py` groundwork is absent; it has no production caller and does not block the Start proof.
+- C4 closed: the installed extension proved its own backend child, 52 bound MPFB2 channels, 52/52 live producer coverage, 332 applied packets, actual shape-key movement, final green camera/packet/Blender lights, and complete PID/port cleanup. The run used a disposable blend copy and did not persist machine-specific paths or preferences.
+- The live backend was intentionally tree-terminated by the extension and reported process exit code 1 while still returning a successful stop result; independent PID and port probes proved cleanup. The C4 report therefore gates cleanup on observable ownership/state/PID/port truth rather than interpreting a forced Windows process exit code as graceful shutdown.
 - Owner authorization received: "Dale, encargate de resolver todo eso."
 
 ## Next step
 
-Run C4 against the installed `bl_ext.user_default.realcapture` extension with the existing MPFB2 rig, proving backend Start/Stop ownership, dashboard truth, Blender heartbeat, live rig movement, and complete child cleanup.
+Close C5 by recording the MPFB2/shape-key-first and reversible-weight decisions while preserving the failed 30-minute M1 soak, post-inference latency blind spot, and unwired weight application as explicit open limits.
