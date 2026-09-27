@@ -2,12 +2,81 @@
 
 from __future__ import annotations
 
+import time
+
 import bpy
 
+from . import backend_process, cockpit, dashboard_client
+from .cockpit import CockpitError
 from .consumer import CaptureConsumer
 from .session import SessionError, SessionRecorder
 
 _consumer: CaptureConsumer | None = None
+_process: backend_process.BackendProcess | None = None
+_poller: dashboard_client.DashboardPoller | None = None
+_poller_port: int | None = None
+
+
+def _preferences_of(context):
+    """This addon's preferences, or None when they are not available.
+
+    For an installed extension the addons key is the FULL module path
+    (``bl_ext.<repo>.realcapture``), which is exactly what ``__package__`` is
+    inside this module in both modes. The panel must draw a sane section when
+    ``.preferences`` is None instead of raising.
+    """
+    addons = context.preferences.addons
+    entry = addons.get(__package__)
+    if entry is None:
+        return None
+    return entry.preferences
+
+
+def _ensure_poller(dashboard_port: int) -> None:
+    """Start the dashboard poller for THIS port; its fetch runs off the UI thread.
+
+    A poller already reading a different port is rebuilt, never reused: a
+    panel whose port changed but whose data comes from the old one is stale
+    by construction.
+    """
+    global _poller, _poller_port
+    if not cockpit.needs_new_poller(_poller_port, dashboard_port):
+        return
+    _drop_poller()
+    _poller = dashboard_client.DashboardPoller(dashboard_port)
+    _poller.start()
+    _poller_port = dashboard_port
+
+
+def _drop_poller() -> None:
+    global _poller, _poller_port
+    if _poller is not None:
+        _poller.stop()
+        _poller = None
+    _poller_port = None
+
+
+def _ensure_timer() -> None:
+    if not bpy.app.timers.is_registered(_tick):
+        bpy.app.timers.register(_tick, first_interval=cockpit.TICK_INTERVAL_S)
+
+
+def _tick():
+    """Timer callback: refresh the panel and return the next interval.
+
+    Blender silently unregisters a timer that raises, which would freeze the
+    panel's lights, so the whole body is guarded: on any failure the tick
+    keeps itself alive with the ordinary interval.
+    """
+    try:
+        for window in bpy.context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type == "VIEW_3D":
+                    area.tag_redraw()
+        poller_alive = _poller is not None and _poller.is_alive()
+        return cockpit.next_tick_interval(poller_alive)
+    except Exception:  # noqa: BLE001 - a raising timer must never kill the redraw loop
+        return cockpit.TICK_INTERVAL_S
 
 
 def _get_consumer() -> CaptureConsumer:
@@ -110,6 +179,91 @@ class RC_OT_replay_session(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class RC_OT_start_backend(bpy.types.Operator):
+    """Start the capture backend as a hidden child process"""
+
+    bl_idname = "realcapture.start_backend"
+    bl_label = "Start Pipeline"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        global _process
+        if _process is not None and _process.is_alive():
+            self.report({"INFO"}, f"already running (pid {_process.pid})")
+            return {"FINISHED"}
+        prefs = _preferences_of(context)
+        scene = getattr(context.scene, "realcapture", None)
+        scene_udp_port = getattr(scene, "udp_port", None)
+        try:
+            settings = cockpit.settings_from_preferences(
+                prefs, scene_udp_port=scene_udp_port
+            )
+            paths = settings.paths()
+            argv = settings.argv()
+        except (CockpitError, backend_process.BackendError) as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        process = backend_process.start_backend(
+            paths, argv, prober=dashboard_client.probe_dashboard
+        )
+        _process = process
+        _ensure_poller(settings.dashboard_port)
+        _ensure_timer()
+        if process.started:
+            self.report({"INFO"}, process.reason)
+        else:
+            # Not started (port already held, probe failure): say exactly why.
+            self.report({"WARNING"}, process.reason)
+        return {"FINISHED"}
+
+
+class RC_OT_stop_backend(bpy.types.Operator):
+    """Stop the backend child this add-on started"""
+
+    bl_idname = "realcapture.stop_backend"
+    bl_label = "Stop Pipeline"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        global _process
+        process = _process
+        if process is None:
+            self.report({"WARNING"}, "the backend was not started by this add-on")
+            return {"CANCELLED"}
+        result = process.stop()
+        if cockpit.stop_clears_state(result):
+            # Only a real stop forgets the child; a failed stop keeps it on the
+            # panel, alive and named.
+            _process = None
+            _drop_poller()
+        if result.stopped:
+            self.report({"INFO"}, result.reason)
+            return {"FINISHED"}
+        # A stop that did not stop says so.
+        self.report({"ERROR"}, result.reason)
+        return {"CANCELLED"}
+
+
+class RC_OT_open_control_room(bpy.types.Operator):
+    """Open the RealCapture Control Room dashboard in the browser"""
+
+    bl_idname = "realcapture.open_control_room"
+    bl_label = "Open Control Room"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        prefs = _preferences_of(context)
+        port = getattr(prefs, "dashboard_port", None)
+        if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
+            self.report(
+                {"ERROR"},
+                "the RealCapture preference 'dashboard_port' is not set to a usable port",
+            )
+            return {"CANCELLED"}
+        bpy.ops.wm.url_open(url=f"http://127.0.0.1:{port}/")
+        return {"FINISHED"}
+
+
 class RC_PT_main_panel(bpy.types.Panel):
     bl_label = "RealCapture"
     bl_space_type = "VIEW_3D"
@@ -144,6 +298,8 @@ class RC_PT_main_panel(bpy.types.Panel):
         if stats.packets_dropped_stale:
             box.label(text=f"Stale drops: {stats.packets_dropped_stale}", icon="ERROR")
 
+        self._draw_pipeline(layout, context)
+
         col = layout.column(align=True)
         col.prop(settings, "record_session")
         col.prop(settings, "session_path")
@@ -153,6 +309,45 @@ class RC_PT_main_panel(bpy.types.Panel):
         col.label(text="Bind drivers to:")
         col.label(text='  controller["rc_shape_<name>"]')
         col.label(text='  controller["rc_pose_<rx..tz>"]')
+
+
+    def _draw_pipeline(self, layout, context) -> None:  # noqa: ANN001
+        """The Pipeline box: start / stop / Control Room plus the lights."""
+        box = layout.box()
+        box.label(text="Pipeline")
+        row = box.row(align=True)
+        row.operator("realcapture.start_backend", icon="PLAY", text="Start")
+        row.operator("realcapture.stop_backend", icon="PAUSE", text="Stop")
+        box.operator(
+            "realcapture.open_control_room", icon="WINDOW", text="Control Room"
+        )
+
+        prefs = _preferences_of(context)
+        if prefs is None:
+            box.label(
+                text="RealCapture preferences are not available in this context",
+                icon=cockpit.light_icon("unknown"),
+            )
+        else:
+            for health in cockpit.child_rows(_process):
+                self._draw_health_row(box, health)
+            if _poller is not None:
+                snapshot = _poller.snapshot()  # cached read: no I/O on this thread
+                for health in cockpit.connection_rows(snapshot, now_s=time.monotonic()):
+                    self._draw_health_row(box, health)
+            else:
+                box.label(
+                    text="Dashboard: not polling (start the pipeline)",
+                    icon=cockpit.light_icon("unknown"),
+                )
+
+    @staticmethod
+    def _draw_health_row(layout, health) -> None:  # noqa: ANN001
+        """One HealthRow: state as text as well as icon, detail on its own line."""
+        row = layout.row(align=True)
+        row.label(text=f"{health.label}: {health.state}", icon=health.icon)
+        if health.detail:
+            row.label(text=health.detail)
 
 
 class RC_PT_rig_connector_panel(bpy.types.Panel):
@@ -203,6 +398,9 @@ classes = (
     RC_OT_start_capture,
     RC_OT_stop_capture,
     RC_OT_replay_session,
+    RC_OT_start_backend,
+    RC_OT_stop_backend,
+    RC_OT_open_control_room,
     RC_PT_main_panel,
     RC_PT_rig_connector_panel,
 )
@@ -211,9 +409,19 @@ classes = (
 def register() -> None:
     for cls in classes:
         bpy.utils.register_class(cls)
+    _ensure_timer()
 
 
 def unregister() -> None:
+    if bpy.app.timers.is_registered(_tick):
+        bpy.app.timers.unregister(_tick)
+    _drop_poller()
+    global _process
+    process = _process
+    _process = None
+    if process is not None:
+        # Rule 11: disabling the addon must not leave a camera running.
+        process.stop()
     if _consumer is not None and _consumer.running:
         _consumer.stop()
     for cls in reversed(classes):

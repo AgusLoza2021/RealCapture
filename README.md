@@ -155,7 +155,7 @@ measurement.
 | `backend/` | Capture engines (MediaPipe default, OpenSeeFace alternative), packet schema, Control Room dashboard, CLI entry point |
 | `addon/` | Blender addon: receiver, consumer, telemetry, session record/replay, rig connector, wizard, UI panel |
 | `tools/` | Headless Blender smoke and soak tests, the soak sender, and the pure soak gate logic |
-| `tests/` | pytest suite (479 tests) |
+| `tests/` | pytest suite (524 tests) |
 | `docs/` | Technical design, milestone roadmap, Control Room guide, landscape research |
 | `odd/` | Feature task documents and their evidence |
 
