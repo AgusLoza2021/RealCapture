@@ -29,8 +29,8 @@ The existing `packet.t` remains the post-inference transport timestamp. A new ac
 | id | Work unit | Status | Allowed edit surfaces | Evidence |
 |---|---|---|---|---|
 | T1 | Stamp each successful camera acquisition and preserve the exact frame stamp through the async MediaPipe callback into `Packet.extra.acq_t_ms`. Add dependency-free tests for exact correlation, no-face behavior, callback reordering, and bounded pending state. | done | `backend/backends/mediapipe_backend.py`; `tests/test_mediapipe_capture_stamp.py` | focused 35 passed; independent verifier PASS; commit recorded below |
-| T2 | Add fail-closed camera-to-rig telemetry in Blender: measured sample count, rolling average/max, session max, invalid-stamp count, reset behavior, and truthful UI states. Keep transport telemetry unchanged. | pending | `addon/telemetry.py`; `addon/ui.py`; `tests/test_telemetry.py` | pending |
-| T3 | Extend the installed-Start proof to record and validate camera-to-rig latency as a distinct measured field, update the milestone/roadmap wording, then run focused, canonical, and one exclusive live proof. | pending | `tools/blender_start_proof.py`; `tests/test_blender_start_proof.py`; `docs/roadmap.md`; `odd/tasks/milestone-closure-m0-m1.md`; this file | pending |
+| T2 | Add fail-closed camera-to-rig telemetry in Blender: measured sample count, rolling average/max, session max, invalid-stamp count, reset behavior, and truthful UI states. Keep transport telemetry unchanged. | done | `addon/telemetry.py`; `addon/ui.py`; `tests/test_telemetry.py` | 32 telemetry tests + 75 adjacent tests passed; independent verifier PASS; commit recorded below |
+| T3 | Extend the installed-Start proof to record and validate camera-to-rig latency as a distinct measured field, update the milestone/roadmap wording, then run focused, canonical, and one exclusive live proof. | in progress | `tools/blender_start_proof.py`; `tests/test_blender_start_proof.py`; `docs/roadmap.md`; `odd/tasks/milestone-closure-m0-m1.md`; this file | pending |
 
 ## Acceptance criteria
 
@@ -59,6 +59,15 @@ The existing `packet.t` remains the post-inference transport timestamp. A new ac
 - Independent verification: PASS. Exact callback-key correlation, out-of-order delivery, deterministic bounded eviction, no-fabrication behavior, epoch-clock choice, schema-v1 preservation, and import isolation were checked. The production seam and epoch choice have discriminating tests.
 - Runtime harness: N/A for T1 because camera/Blender execution is reserved for the exclusive T3 proof.
 - Rollback boundary: remove `tests/test_mediapipe_capture_stamp.py` and revert the acquisition-correlation additions in `backend/backends/mediapipe_backend.py`; no other behavior depends on T1 before T2/T3 land.
-- Commit: pending creation in this work unit.
+- Commit: `738b0b06ff044487597da51f57843f14abdb5d30` (`feat(capture): stamp camera acquisition time`).
 
-T2 and T3 evidence will be appended when each task closes.
+### T2 — measure latency fail-closed in Blender
+
+- TDD RED: focused telemetry tests exposed missing camera-latency fields/states; the first verifier then rejected null/missing conflation, absent missing-count telemetry, and duplicate chronology coverage.
+- GREEN: `python -m pytest tests/test_telemetry.py -q` -> 32 passed; adjacent plugin/cockpit/stamp/packet/schema set -> 75 passed.
+- Independent verification: PASS after correction. Missing keys, present-invalid values, rolling and session aggregates, reset, mixed states, distinct error state/icon mapping, and independently discriminating send/apply chronology bounds were checked. Existing transport/FPS/gap semantics and schema v1 remained unchanged.
+- Runtime harness: N/A for T2 because the panel/data integration is exercised in the exclusive T3 installed-Start proof.
+- Rollback boundary: revert the camera-latency fields/state helper in `addon/telemetry.py`, the additive panel line in `addon/ui.py`, and the T2 tests in `tests/test_telemetry.py`; T1 packet stamping remains independently valid.
+- Commits after the authorized review-size split: `7c96cc33464d660cd80c60914fca5ee18f638c3f` (`feat(blender): record camera to rig latency`) and `2f4f1a940d58a6098188d6ced4ed206d9c3ef5a3` (`feat(blender): show truthful camera latency state`). Both slices are below 400 authored changed lines.
+
+T3 evidence will be appended when it closes.
