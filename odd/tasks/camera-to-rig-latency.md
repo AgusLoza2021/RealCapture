@@ -32,6 +32,25 @@ The existing `packet.t` remains the post-inference transport timestamp. A new ac
 | T2 | Add fail-closed camera-to-rig telemetry in Blender: measured sample count, rolling average/max, session max, invalid-stamp count, reset behavior, and truthful UI states. Keep transport telemetry unchanged. | done | `addon/telemetry.py`; `addon/ui.py`; `tests/test_telemetry.py` | 32 telemetry tests + 75 adjacent tests passed; independent verifier PASS; commit recorded below |
 | T3 | Extend the installed-Start proof to record and validate camera-to-rig latency as a distinct measured field, update the public test count and milestone/roadmap wording, then run focused, canonical, and one exclusive live proof. | blocked — pending live face presence (not done) | `tools/blender_start_proof.py`; `tests/test_blender_start_proof.py`; `README.md`; `docs/roadmap.md`; `odd/tasks/milestone-closure-m0-m1.md`; `odd/tasks/producer-vocabulary-contract.md`; this file | harness done 2026-09-28; exclusive live attempt failed closed on no face — see T3 evidence below |
 
+## Delivery strategy
+
+The owner selected a five-PR stack on 2026-09-28 because the complete candidate is 1,185
+changed lines and exceeds the 400-line review budget. Each PR targets its immediate predecessor
+until that predecessor lands; the next PR must then be retargeted to `main` before merge.
+Existing commits remain unchanged.
+
+| Position | Branch | Commits | Review budget | Outcome |
+|---|---|---|---:|---|
+| 1 | `feat/camera-latency-01-acquisition` | `738b0b0` | 343 | Bounded acquisition-stamp correlation. |
+| 2 | `feat/camera-latency-02-telemetry-core` | `7c96cc3` | 250 | Fail-closed Blender aggregates. |
+| 3 | `feat/camera-latency-03-ui-evidence` | `2f4f1a9`, `4fd0b05` | 193 | Truthful UI state and T2 evidence. |
+| 4 | `test/camera-latency-04-proof-harness` | `e5ec555` | 325 | Installed-Start schema `/3` proof harness. |
+| 5 | `feat/camera-to-rig-latency` | `5bacd85` plus this delivery record | below 400 | Pending-evidence record; remains draft until a face-visible live run satisfies criterion 6. |
+
+Repository policy note: this repository has no YAML Issue Forms, approved-issue label, PR
+template, `type:*` labels, or CI workflows. The stack therefore follows the established direct
+verified-integration path rather than fabricating issue linkage or policy labels.
+
 ## Acceptance criteria
 
 1. Every emitted MediaPipe packet produced from a captured frame includes an integer epoch-ms `extra.acq_t_ms` correlated to that exact async result.
