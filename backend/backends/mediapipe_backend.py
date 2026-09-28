@@ -26,6 +26,14 @@ FACE_LANDMARKER_TASK_URL = (
 )
 DEFAULT_MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "face_landmarker.task"
 
+# Bounded correlation of async callback results to their acquisition stamps,
+# keyed by the ``timestamp_ms`` handed to ``detect_async`` (which MediaPipe
+# echoes back in the callback). LIVE_STREAM queues only a handful of frames,
+# so 64 is ample headroom while keeping the structure explicitly bounded.
+# Eviction is deterministic (oldest submitted entry first, FIFO); an evicted
+# or missing correlation never fabricates a stamp.
+MAX_PENDING_STAMPS = 64
+
 # Attribute paths under the mediapipe module that expose BaseOptions, in
 # preference order: the canonical tasks.python location, its tasks-level
 # re-export (mediapipe 1.x aliases tasks -> tasks.python), then the legacy
@@ -103,6 +111,11 @@ class MediaPipeBackend(CaptureBackend):
         self._mailbox: list[Any] = []  # size-1 mailbox under lock (latest-frame-wins)
         self._mailbox_lock = threading.Lock()
         self._last_timestamp_ms = 0
+        # Bounded pending correlation: timestamp_ms -> acquisition epoch ms.
+        # Written by the capture thread, popped by the MediaPipe callback
+        # thread; every access is under ``_pending_lock``.
+        self._pending_acq: dict[int, int] = {}
+        self._pending_lock = threading.Lock()
 
     # -- heavy dependency handling -------------------------------------------
 
@@ -163,8 +176,14 @@ class MediaPipeBackend(CaptureBackend):
                     ok, frame = cap.read()
                     if not ok:
                         # Transient read failure: do not spin, do not queue.
+                        # No frame acquired -> no acquisition stamp registered.
                         time.sleep(0.05)
                         continue
+
+                    # Sample the acquisition stamp immediately after the
+                    # successful read: it is the start of camera-to-rig
+                    # latency. Failed reads never reach this line.
+                    acq_t_ms = self._sample_acq_t_ms()
 
                     # Publish the raw BGR frame for the camera preview BEFORE
                     # the RGB conversion: the injected encoder expects what
@@ -174,8 +193,11 @@ class MediaPipeBackend(CaptureBackend):
 
                     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-                    timestamp_ms = self._next_timestamp_ms()
-                    landmarker.detect_async(mp_image, timestamp_ms)
+                    # Single submission seam: builds the MediaPipe timestamp,
+                    # registers this frame's acquisition correlation for it,
+                    # and hands the frame to detect_async. Preview publishing
+                    # and RGB conversion above are unchanged.
+                    self._submit_frame(landmarker, mp_image, acq_t_ms)
 
                     self._drain_and_send()
 
@@ -194,20 +216,72 @@ class MediaPipeBackend(CaptureBackend):
         self._last_timestamp_ms = max(now_ms, self._last_timestamp_ms + 1)
         return self._last_timestamp_ms
 
+    def _sample_acq_t_ms(self) -> int:
+        """Integer epoch ms, sampled right after a successful ``cap.read()``."""
+        return int(time.time() * 1000)
+
+    def _register_pending(self, timestamp_ms: int, acq_t_ms: int) -> None:
+        """Correlate one acquisition stamp with the exact async callback key.
+
+        Bounded: registering beyond ``MAX_PENDING_STAMPS`` evicts the oldest
+        pending entry (deterministic FIFO). A callback whose correlation was
+        evicted later emits its packet without a stamp instead of guessing.
+        """
+        with self._pending_lock:
+            self._pending_acq[timestamp_ms] = acq_t_ms
+            while len(self._pending_acq) > MAX_PENDING_STAMPS:
+                oldest = next(iter(self._pending_acq))
+                del self._pending_acq[oldest]
+
+    def _submit_frame(self, landmarker, mp_image, acq_t_ms: int) -> int:  # noqa: ANN001 - mediapipe objects
+        """Register the acquisition correlation and submit one frame.
+
+        The single seam between the capture loop and the async landmarker:
+        ``timestamp_ms`` is created here, registered in the pending map, and
+        passed to ``detect_async``, so the callback MediaPipe later fires
+        with this timestamp finds exactly this frame's acquisition stamp.
+        Registration strictly precedes submission.
+        """
+        timestamp_ms = self._next_timestamp_ms()
+        self._register_pending(timestamp_ms, acq_t_ms)
+        landmarker.detect_async(mp_image, timestamp_ms)
+        return timestamp_ms
+
     def _on_result(self, result, output_image, timestamp_ms) -> None:  # noqa: ANN001 - mediapipe signature
-        """Mediapipe callback: store ONLY the newest result (mailbox size 1)."""
+        """Mediapipe callback: store ONLY the newest result (mailbox size 1).
+
+        ``timestamp_ms`` identifies the exact input frame this result belongs
+        to, so its acquisition stamp is correlated here. Callback ordering may
+        differ from submission ordering; each result keeps its own stamp. A
+        missing correlation (dropped or evicted) yields ``None`` and is
+        reported at send time rather than fabricated.
+        """
+        with self._pending_lock:
+            acq_t_ms = self._pending_acq.pop(timestamp_ms, None)
         with self._mailbox_lock:
-            self._mailbox = [result]
+            self._mailbox = [(result, acq_t_ms)]
 
     def _drain_and_send(self) -> None:
         with self._mailbox_lock:
             mailbox, self._mailbox = self._mailbox, []
         if not mailbox:
             return
-        result = mailbox[0]
+        result, acq_t_ms = mailbox[0]
         packet = self._result_to_packet(result)
-        if packet is not None:
-            self.send_packet(packet)
+        if packet is None:
+            return
+        if acq_t_ms is not None:
+            packet.extra["acq_t_ms"] = int(acq_t_ms)
+        else:
+            # Correlation missing (MediaPipe dropped the callback, or the
+            # entry was evicted by the bounded limit): the packet is still
+            # valid, but no acquisition stamp is fabricated for it. ``t``
+            # stays the post-inference epoch ms either way.
+            logger.debug(
+                "no pending acquisition stamp for a mediapipe result; "
+                "emitting packet without extra.acq_t_ms"
+            )
+        self.send_packet(packet)
 
     def _result_to_packet(self, result) -> Packet | None:  # noqa: ANN001
         if not result.face_blendshapes:
