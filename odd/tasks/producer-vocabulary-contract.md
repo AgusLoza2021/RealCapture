@@ -115,7 +115,7 @@ The C4 installed-extension Start proof stored 52 raw produced shape-key names, w
 independent run **confirms rather than supersedes** the capture: `tongueOut` remains absent from
 the producer vocabulary, and the honest producer claim is `live 51/52`. An earlier C4 summary that
 reported "52/52 live producer channels" was a raw-count vs catalog-size conflation and has been
-retracted; the harness (`tools/blender_start_proof.py`, report schema `/2`) now computes coverage
+retracted; the harness (`tools/blender_start_proof.py`, report schema `/3`) now computes coverage
 from channel NAMES (`coverage_truth`) and enforces, with named constants: exact catalog identity
 by SHA-256 digest over the sorted configured names (`EXPECTED_ARKIT_CATALOG_SHA256`), a configured
 count of exactly 52, sentinel membership (`tongueOut` required; producer-only `_neutral`

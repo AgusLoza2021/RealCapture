@@ -30,7 +30,26 @@ The existing `packet.t` remains the post-inference transport timestamp. A new ac
 |---|---|---|---|---|
 | T1 | Stamp each successful camera acquisition and preserve the exact frame stamp through the async MediaPipe callback into `Packet.extra.acq_t_ms`. Add dependency-free tests for exact correlation, no-face behavior, callback reordering, and bounded pending state. | done | `backend/backends/mediapipe_backend.py`; `tests/test_mediapipe_capture_stamp.py` | focused 35 passed; independent verifier PASS; commit recorded below |
 | T2 | Add fail-closed camera-to-rig telemetry in Blender: measured sample count, rolling average/max, session max, invalid-stamp count, reset behavior, and truthful UI states. Keep transport telemetry unchanged. | done | `addon/telemetry.py`; `addon/ui.py`; `tests/test_telemetry.py` | 32 telemetry tests + 75 adjacent tests passed; independent verifier PASS; commit recorded below |
-| T3 | Extend the installed-Start proof to record and validate camera-to-rig latency as a distinct measured field, update the milestone/roadmap wording, then run focused, canonical, and one exclusive live proof. | in progress | `tools/blender_start_proof.py`; `tests/test_blender_start_proof.py`; `docs/roadmap.md`; `odd/tasks/milestone-closure-m0-m1.md`; this file | pending |
+| T3 | Extend the installed-Start proof to record and validate camera-to-rig latency as a distinct measured field, update the public test count and milestone/roadmap wording, then run focused, canonical, and one exclusive live proof. | blocked — pending live face presence (not done) | `tools/blender_start_proof.py`; `tests/test_blender_start_proof.py`; `README.md`; `docs/roadmap.md`; `odd/tasks/milestone-closure-m0-m1.md`; `odd/tasks/producer-vocabulary-contract.md`; this file | harness done 2026-09-28; exclusive live attempt failed closed on no face — see T3 evidence below |
+
+## Delivery strategy
+
+The owner selected a five-PR stack on 2026-09-28 because the complete candidate is 1,185
+changed lines and exceeds the 400-line review budget. Each PR targets its immediate predecessor
+until that predecessor lands; the next PR must then be retargeted to `main` before merge.
+Existing commits remain unchanged.
+
+| Position | Branch | Commits | Review budget | Outcome |
+|---|---|---|---:|---|
+| 1 | `feat/camera-latency-01-acquisition` | `738b0b0` | 343 | Bounded acquisition-stamp correlation. |
+| 2 | `feat/camera-latency-02-telemetry-core` | `7c96cc3` | 250 | Fail-closed Blender aggregates. |
+| 3 | `feat/camera-latency-03-ui-evidence` | `2f4f1a9`, `4fd0b05` | 193 | Truthful UI state and T2 evidence. |
+| 4 | `test/camera-latency-04-proof-harness` | `e5ec555` | 325 | Installed-Start schema `/3` proof harness. |
+| 5 | `feat/camera-to-rig-latency` | `5bacd85` plus this delivery record | below 400 | Pending-evidence record; remains draft until a face-visible live run satisfies criterion 6. |
+
+Repository policy note: this repository has no YAML Issue Forms, approved-issue label, PR
+template, `type:*` labels, or CI workflows. The stack therefore follows the established direct
+verified-integration path rather than fabricating issue linkage or policy labels.
 
 ## Acceptance criteria
 
@@ -70,4 +89,38 @@ The existing `packet.t` remains the post-inference transport timestamp. A new ac
 - Rollback boundary: revert the camera-latency fields/state helper in `addon/telemetry.py`, the additive panel line in `addon/ui.py`, and the T2 tests in `tests/test_telemetry.py`; T1 packet stamping remains independently valid.
 - Commits after the authorized review-size split: `7c96cc33464d660cd80c60914fca5ee18f638c3f` (`feat(blender): record camera to rig latency`) and `2f4f1a940d58a6098188d6ced4ed206d9c3ef5a3` (`feat(blender): show truthful camera latency state`). Both slices are below 400 authored changed lines.
 
-T3 evidence will be appended when it closes.
+### T3 — Start-proof harness landed; live proof blocked on face presence
+
+**Status: not done.** The harness and every pre-live gate are complete; the exclusive live
+attempt ran once on 2026-09-28 and failed closed because no face was in view. It has not been
+retried, by explicit owner decision.
+
+**Pre-live gates, all observed 2026-09-28:**
+
+- Canonical suite: `python -m pytest tests -q` → **707 passed**, 1 pre-existing third-party
+  warning. Self-test passed.
+- Extension validator/build: **exit 0**; artifact `dist/realcapture-0.1.0.zip`, 66,824 bytes,
+  SHA-256 `b96616fec55329deccbcab5f21772522bc5dd47c059a5282400480dbc20d3dc1`.
+- Install verification: the installed `telemetry.py`, `ui.py`, and `__init__.py` hashes matched
+  the staged build. Pre-install backup preserved at the run's temporary folder
+  (`%TEMP%/realcapture-extension-backup-20260928-101833/`).
+- Harness commit: `e5ec555d81b0c031533897ef5c38116158ca7734`; the Start-proof report schema is
+  now `/3`.
+
+**Exclusive live attempt** (evidence folder `%TEMP%/rc-latency-proof-20260928-101902/`):
+
+- The disposable `.blend` SHA matched its source; Blender exited **1**.
+- The camera opened and the dashboard camera light went **green**, but **no face was detected**:
+  zero packets, zero applied packets, zero camera samples. The packets and Blender lights
+  stayed red.
+- The `/3` verdict **failed closed** rather than reporting a fabricated 0 ms — the intended
+  behaviour under acceptance criterion 3, but it means no camera-to-rig sample was observed and
+  acceptance criterion 6 remains unmet.
+- Cleanup succeeded: the capture/backend stop operators finished, extension state was cleared,
+  the backend PID was gone, and UDP 11111 and TCP 8765 were bindable again.
+
+**Owner decision (2026-09-28):** do not retry now; live evidence stays pending.
+
+**Exact next action:** re-run the same exclusive installed-Start proof with a face present in
+view, then record the `/3` verdict here. T3 stays blocked until that run observes at least one
+valid camera-to-rig sample. This attempt does not close M1 stability.
