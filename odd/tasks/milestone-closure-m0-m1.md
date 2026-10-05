@@ -6,9 +6,11 @@ TDD: RED-first for the telemetry defect. Runner: `python -m pytest tests/ -q`;
 Blender 4.5 headless for the transport measurement.
 
 **Delivered 2026-09-25:** T1–T5 (roadmap reconciled, defect fixed under RED-first, real
-measurement produced, status set honestly), plus the M0 README stub. **Still open and
-owner-owned:** T6 (full 30-minute re-run on the fixed code) and T9 (choose the measurement
-point for the camera + inference segment, or reword the criterion). **T7 and T8 landed and
+measurement produced, status set honestly), plus the M0 README stub. **Decided 2026-09-28:** T9 — the owner selected successful frame acquisition, sampled
+immediately after `cap.read()`, as the official camera-to-rig latency start
+(`odd/tasks/camera-to-rig-latency.md`). **Still open:** the 30-minute soak remains failed
+(T6), and T10 — live camera-to-rig evidence plus the aggregate that owns the ≤60 ms
+criterion — is pending. **T7 and T8 landed and
 were verified in their own feature doc**, `odd/tasks/m1-latency-gate-hardening.md`: the gate is
 no longer vacuous (it exits 1 on a real 158 ms measurement), and the weak tests it exposed are
 tightened.
@@ -109,7 +111,8 @@ packet's own stamp so replay still reports zero deliberately rather than by acci
 | T6 | (owner decision) re-run the full 30-minute soak for the closure record | done 2026-09-25 — **failed**: a 37 s stall incident (peak 2,359.8 ms, ~1,025 frames dropped) plus two smaller clusters, `exit 1`. The 30-minute criterion is not re-earned; new doc `odd/tasks/soak-stall-incident-investigation.md` |
 | T7 | Make the soak latency gate non-vacuous: lower bound + a session-wide max instead of the 120-sample window | done — `odd/tasks/m1-latency-gate-hardening.md`, verified: gate exits 1 at avg 158.1 ms / session max 168.3 ms |
 | T8 | Strengthen `tests/test_telemetry.py` so each test is discriminating for the clock-domain fix (see finding 1) | done — the three tests now fail against the pre-fix clock on assertions, not on arity |
-| T9 | (owner decision) choose the measurement point for the camera + inference segment, or reword the M1 criterion | blocked on owner |
+| T9 | (owner decision) choose the measurement point for the camera + inference segment, or reword the M1 criterion | done 2026-09-28 — successful frame acquisition (immediately after `cap.read()`) is the official start; evidence in `odd/tasks/camera-to-rig-latency.md` |
+| T10 | (owner decision) obtain live camera-to-rig evidence from an exclusive installed-extension run with a face present, and decide which aggregate (rolling average or session max) owns the ≤60 ms criterion | pending — first exclusive live attempt 2026-09-28 found no face: zero packets, zero applied, zero camera samples; owner chose not to retry. M1 latency and soak closure are NOT claimed |
 
 ## Evidence
 
@@ -192,6 +195,23 @@ reason the numbers themselves expose: the metric cannot see the segment the crit
 - No full 30-minute run on the fixed code under the *windowed* gate (T6, superseded). The
   re-run was executed 2026-09-25 under the hardened gate and **failed**; see above and
   `odd/tasks/soak-stall-incident-investigation.md`.
+
+### T9/T10 — measurement point decided; live evidence pending (2026-09-28)
+
+The camera + inference segment now has an official measurement point: a successful frame
+acquisition, sampled immediately after `cap.read()`. The instrumentation chain landed in
+`odd/tasks/camera-to-rig-latency.md` (T1 stamping commit `738b0b06ff044487597da51f57843f14abdb5d30`,
+T2 telemetry commits `7c96cc33464d660cd80c60914fca5ee18f638c3f` and
+`2f4f1a940d58a6098188d6ced4ed206d9c3ef5a3`, T3 Start-proof harness commit
+`e5ec555d81b0c031533897ef5c38116158ca7734`, report schema `/3`).
+
+The first exclusive live attempt on 2026-09-28 **failed closed with no face in view**: the
+camera opened and its dashboard light went green, but zero packets, zero applied packets, and
+zero camera samples were produced, and the `/3` verdict reported failure rather than a
+fabricated 0 ms. Cleanup verified cleanly (stop operators finished, backend PID gone, UDP
+11111 and TCP 8765 bindable again). The owner chose not to retry, so live evidence — and the
+decision of which aggregate owns the ≤60 ms criterion — stays open under T10. **Neither the
+M1 latency criterion nor the 30-minute soak is closed by any of this.**
 
 ## Evidence
 

@@ -10,7 +10,15 @@ import time
 import pytest
 
 from addon.schema import Packet
-from addon.telemetry import STATS_WINDOW, CaptureStats
+from addon.telemetry import (
+    CAMERA_STATE_INVALID,
+    CAMERA_STATE_MEASURED,
+    CAMERA_STATE_MEASURED_INVALID,
+    CAMERA_STATE_UNAVAILABLE,
+    STATS_WINDOW,
+    CaptureStats,
+    camera_latency_state,
+)
 
 VALID_POSE = {"rx": 0.0, "ry": 0.0, "rz": 0.0, "tx": 0.0, "ty": 0.0, "tz": 0.0}
 VALID_SHAPES = {"jawOpen": 0.5}
@@ -247,6 +255,8 @@ def test_valid_camera_stamp_produces_latency_and_counts_sample():
     assert stats.session_max_camera_ms == pytest.approx(40.0, abs=0.5)
     assert stats.missing_acq_stamps == 0
     assert stats.invalid_acq_stamps == 0
+    state, _text = camera_latency_state(stats)
+    assert state == CAMERA_STATE_MEASURED
 
 
 def test_camera_stamp_equal_to_applied_time_is_a_valid_zero_sample():
@@ -258,6 +268,8 @@ def test_camera_stamp_equal_to_applied_time_is_a_valid_zero_sample():
     )
     assert stats.camera_samples == 1
     assert stats.avg_camera_ms == 0.0
+    state, _text = camera_latency_state(stats)
+    assert state == CAMERA_STATE_MEASURED
 
 
 def test_absent_stamp_key_is_missing_not_invalid_and_packet_still_counts():
@@ -278,6 +290,51 @@ def test_absent_stamp_key_is_missing_not_invalid_and_packet_still_counts():
     # The packet itself was applied and its transport latency recorded.
     assert stats.packets_applied == 1
     assert stats.max_transport_ms >= 0.0
+    state, _text = camera_latency_state(stats)
+    assert state == CAMERA_STATE_UNAVAILABLE
+
+
+def test_all_missing_packets_report_the_missing_count_as_unavailable():
+    """Every applied packet without the key increments missing_acq_stamps; the
+    unavailable text must name that count, not look like a measured value."""
+    now_ms = int(time.time() * 1000)
+    stats = CaptureStats()
+    for _ in range(3):
+        stats.record_applied(make_packet(now_ms), time.monotonic() * 1000.0, float(now_ms))
+    assert stats.missing_acq_stamps == 3
+    assert stats.camera_samples == 0
+    assert stats.avg_camera_ms is None
+    state, text = camera_latency_state(stats)
+    assert state == CAMERA_STATE_UNAVAILABLE
+    assert "3" in text, "the missing stamp count must be visible"
+
+
+def test_fresh_state_says_no_samples_yet_and_never_implies_measured_zero():
+    stats = CaptureStats()
+    assert stats.camera_samples == 0
+    assert stats.missing_acq_stamps == 0
+    assert stats.avg_camera_ms is None
+    state, text = camera_latency_state(stats)
+    assert state == CAMERA_STATE_UNAVAILABLE
+    assert "no samples yet" in text
+
+
+def test_missing_stamp_beside_valid_ones_is_measured_and_reports_missing():
+    """One valid + one stamp-less packet: measured values retained, missing
+    count visible, no error state (missing is not invalid)."""
+    now_ms = int(time.time() * 1000)
+    stats = CaptureStats()
+    stats.record_applied(
+        make_stamped_packet(now_ms, now_ms - 30), time.monotonic() * 1000.0, float(now_ms)
+    )
+    stats.record_applied(make_packet(now_ms), time.monotonic() * 1000.0, float(now_ms))
+    assert stats.camera_samples == 1
+    assert stats.missing_acq_stamps == 1
+    assert stats.invalid_acq_stamps == 0
+    assert stats.avg_camera_ms == pytest.approx(30.0, abs=0.5)
+    state, text = camera_latency_state(stats)
+    assert state == CAMERA_STATE_MEASURED
+    assert "1" in text, "the missing stamp count must stay visible"
 
 
 @pytest.mark.parametrize(
@@ -304,6 +361,8 @@ def test_unusable_stamp_classes_count_invalid_and_never_aggregate(extra):
     assert stats.invalid_acq_stamps == 1
     # The packet itself stays applied with valid transport telemetry.
     assert stats.packets_applied == 1
+    state, _text = camera_latency_state(stats)
+    assert state == CAMERA_STATE_INVALID
 
 
 def test_null_stamp_value_is_invalid_not_missing():
@@ -317,6 +376,8 @@ def test_null_stamp_value_is_invalid_not_missing():
     assert stats.camera_samples == 0
     assert stats.invalid_acq_stamps == 1
     assert stats.missing_acq_stamps == 0
+    state, _text = camera_latency_state(stats)
+    assert state == CAMERA_STATE_INVALID
 
 
 def test_stamp_after_applied_time_is_invalid_by_the_applied_bound():
@@ -350,6 +411,37 @@ def test_stamp_after_send_time_is_invalid_by_the_send_bound():
     assert stats.camera_samples == 0
     assert stats.invalid_acq_stamps == 1
     assert stats.avg_camera_ms is None
+
+
+def test_mixed_valid_and_invalid_keeps_measured_values_and_counts_invalid():
+    """Invalid stamps never poison the aggregates but stay visible."""
+    now_ms = int(time.time() * 1000)
+    stats = CaptureStats()
+    stats.record_applied(
+        make_stamped_packet(now_ms, now_ms - 20), time.monotonic() * 1000.0, float(now_ms)
+    )
+    stats.record_applied(
+        make_packet(now_ms, {"acq_t_ms": "bogus"}),
+        time.monotonic() * 1000.0,
+        float(now_ms),
+    )
+    stats.record_applied(
+        make_packet(now_ms, {"acq_t_ms": -1}),
+        time.monotonic() * 1000.0,
+        float(now_ms),
+    )
+    stats.record_applied(
+        make_stamped_packet(now_ms, now_ms - 40), time.monotonic() * 1000.0, float(now_ms)
+    )
+    assert stats.camera_samples == 2
+    assert stats.invalid_acq_stamps == 2
+    assert stats.missing_acq_stamps == 0
+    assert stats.avg_camera_ms == pytest.approx(30.0, abs=0.5)
+    assert stats.max_camera_ms == pytest.approx(40.0, abs=0.5)
+    state, text = camera_latency_state(stats)
+    assert state == CAMERA_STATE_MEASURED_INVALID, "valid+invalid must be an error state"
+    assert "30" in text and "40" in text, "measured values must be retained"
+    assert "2" in text, "the invalid stamp count must stay visible"
 
 
 def test_camera_window_rolls_but_session_max_keeps_the_spike():
@@ -391,6 +483,9 @@ def test_reset_clears_every_camera_counter_and_window():
     assert stats.avg_camera_ms is None
     assert stats.max_camera_ms is None
     assert stats.session_max_camera_ms is None
+    state, text = camera_latency_state(stats)
+    assert state == CAMERA_STATE_UNAVAILABLE
+    assert "no samples yet" in text
 
 
 def test_camera_stamp_leaves_transport_telemetry_unchanged():
@@ -411,3 +506,15 @@ def test_camera_stamp_leaves_transport_telemetry_unchanged():
     )
     assert with_stamp.packets_applied == without_stamp.packets_applied
     assert with_stamp.applied_fps == pytest.approx(without_stamp.applied_fps)
+
+
+def test_camera_state_text_reports_values_and_session_max():
+    now_ms = int(time.time() * 1000)
+    stats = CaptureStats()
+    stats.record_applied(
+        make_stamped_packet(now_ms, now_ms - 25), time.monotonic() * 1000.0, float(now_ms)
+    )
+    state, text = camera_latency_state(stats)
+    assert state == CAMERA_STATE_MEASURED
+    assert "25" in text, "the measured average must be rendered"
+    assert "session" in text.lower(), "the session max must be rendered"

@@ -32,6 +32,12 @@ from .schema import Packet
 
 STATS_WINDOW = 120  # samples kept for avg/max latency
 
+# UI-facing camera-latency states, derived by ``camera_latency_state``.
+CAMERA_STATE_MEASURED = "measured"  # valid samples, no invalid stamps
+CAMERA_STATE_MEASURED_INVALID = "measured_invalid"  # valid samples + invalid stamps
+CAMERA_STATE_UNAVAILABLE = "unavailable"  # no acquisition stamps seen at all
+CAMERA_STATE_INVALID = "invalid"  # stamps present but every one unusable
+
 
 @dataclass
 class CaptureStats:
@@ -158,3 +164,51 @@ class CaptureStats:
         self._latency_window.clear()
         self._applied_times.clear()
         self._camera_window.clear()
+
+
+def camera_latency_state(stats: CaptureStats) -> tuple[str, str]:
+    """Derive the Blender panel's camera-to-rig line, dependency-free.
+
+    Returns ``(state, text)`` with one of four truthful states:
+    - ``CAMERA_STATE_MEASURED``: valid samples, no invalid stamps; reports the
+      measured values plus the missing-stamp count when stamps were absent.
+    - ``CAMERA_STATE_MEASURED_INVALID``: valid samples kept AND invalid stamps
+      present; the panel renders this with an error icon.
+    - ``CAMERA_STATE_UNAVAILABLE``: no valid samples and no invalid stamps;
+      names the missing-stamp count, or says "no samples yet" when fresh. It
+      never shows a measured latency value.
+    - ``CAMERA_STATE_INVALID``: stamps present but every one unusable.
+    """
+    if stats.camera_samples > 0:
+        assert stats.avg_camera_ms is not None
+        assert stats.max_camera_ms is not None
+        assert stats.session_max_camera_ms is not None
+        text = (
+            f"Camera->Rig: avg {stats.avg_camera_ms:.1f} ms / "
+            f"max {stats.max_camera_ms:.1f} ms "
+            f"(session max {stats.session_max_camera_ms:.1f} ms)"
+        )
+        notes = []
+        if stats.invalid_acq_stamps:
+            notes.append(f"invalid stamps: {stats.invalid_acq_stamps}")
+        if stats.missing_acq_stamps:
+            notes.append(f"missing stamps: {stats.missing_acq_stamps}")
+        if notes:
+            text += " - " + ", ".join(notes)
+        state = (
+            CAMERA_STATE_MEASURED_INVALID
+            if stats.invalid_acq_stamps
+            else CAMERA_STATE_MEASURED
+        )
+        return state, text
+    if stats.invalid_acq_stamps > 0:
+        return (
+            CAMERA_STATE_INVALID,
+            f"Camera->Rig: unavailable ({stats.invalid_acq_stamps} invalid acquisition stamps)",
+        )
+    if stats.missing_acq_stamps > 0:
+        return (
+            CAMERA_STATE_UNAVAILABLE,
+            f"Camera->Rig: unavailable (no acquisition stamps in {stats.missing_acq_stamps} packets)",
+        )
+    return CAMERA_STATE_UNAVAILABLE, "Camera->Rig: unavailable (no samples yet)"

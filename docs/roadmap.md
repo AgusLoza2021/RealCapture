@@ -42,9 +42,19 @@ Goal: trustworthy plumbing before feature work.
 > validated against that constant. Fixed the same day (epoch on both sides); re-measured over
 > real UDP: **avg 9.1 ms / max 18.0 ms**, 5,400 packets, 0 invalid. That figure covers
 > transport + consumer apply only: the `t` stamp is taken *after* engine inference, so camera
-> capture and inference are excluded from this metric by construction. The "reference scene"
-> number this criterion names therefore still has no measurement point; choosing one (a stamp
-> at frame grab, or an external end-to-end observer) is an open owner decision.
+> capture and inference are excluded from this metric by construction.
+>
+> **Measurement point decided 2026-09-28; ≤ 60 ms still unmeasured.** The owner selected a
+> successful frame acquisition — sampled immediately after `cap.read()` — as the official start
+> of camera-to-rig latency, so the criterion's metric is acquisition-to-apply. The
+> instrumentation exists and fails closed: the backend stamps `packet.extra.acq_t_ms` per
+> captured frame, the addon records a distinct camera-to-rig aggregate, and the installed
+> Start-proof harness validates it (report schema `/3`). The first exclusive live attempt on
+> 2026-09-28 observed **no face**: the camera opened and its dashboard light went green, but
+> zero packets, zero applied packets, and zero camera samples were produced, and the verdict
+> failed closed instead of reporting a healthy-looking 0 ms. **The ≤ 60 ms criterion therefore
+> remains unmeasured**, pending a live run with a face present, plus the decision of which
+> aggregate owns the bound: `odd/tasks/camera-to-rig-latency.md`.
 >
 > Hardened 2026-09-25 so the same class of failure cannot pass again: the gate logic moved to
 > the pure, unit-testable `tools/soak_gates.py`; it now fails on a zero (dead) measurement, on

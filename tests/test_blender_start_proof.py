@@ -55,6 +55,22 @@ def healthy_cleanup() -> dict:
     }
 
 
+def healthy_camera_to_rig() -> dict:
+    """Final post-pump camera-to-rig acquisition truth for a measured run.
+
+    Every applied packet carried a valid acquisition stamp, so the sample
+    count equals ``packets_applied`` and the aggregates are coherent.
+    """
+    return {
+        "camera_samples": 90,
+        "missing_acq_stamps": 0,
+        "invalid_acq_stamps": 0,
+        "avg_camera_ms": 33.5,
+        "max_camera_ms": 41.0,
+        "session_max_camera_ms": 45.5,
+    }
+
+
 def healthy_report() -> dict:
     return {
         "schema": proof.REPORT_SCHEMA,
@@ -99,6 +115,7 @@ def healthy_report() -> dict:
                 "target_deviations": {"shapekey::jawOpen": 0.5},
             },
             "controller_changed": {"rc_pose_rx": 0.2},  # diagnostics only
+            "camera_to_rig": healthy_camera_to_rig(),
         },
         "coverage": proof.coverage_truth(ARKIT_CATALOG, RAW_OBSERVED),
         # Honest 51/52: 51 ARKit matches + MediaPipe's `_neutral`, tongueOut
@@ -376,6 +393,154 @@ def test_movement_accumulation_ignores_noise_and_counts_new_props() -> None:
     new_baseline = proof.movement_from_samples({}, [{"rc_shape_jawOpen": 0.7}])
     assert proof.window_moved(new_baseline)  # a newly-written nonzero prop moved
     assert proof.movement_from_samples(baseline, None) == {}  # absence never moves
+
+
+# -- camera-to-rig acquisition latency: a distinct fail-closed proof field ---------
+#
+# The /3 contract: the installed consumer's camera-to-rig acquisition stats
+# (valid samples, missing/invalid acquisition stamps, rolling avg/max and
+# session max ms) are recorded in pump_consumer as a dedicated block and
+# re-decided by the verdict layer. This proves measurement AVAILABILITY and
+# CONSISTENCY only: no 60 ms threshold here, the roadmap threshold owner is
+# a separate decision. Transport latency and producer vocabulary coverage
+# are separate existing facts and stay untouched.
+
+
+def test_a_healthy_camera_to_rig_block_fails_nothing() -> None:
+    assert proof.evaluate_proof(healthy_report()) == []
+
+
+def test_an_absent_or_malformed_camera_to_rig_block_fails_closed() -> None:
+    for mutation in ("absent", None, "not a dict", ["not", "a", "dict"]):
+        report = healthy_report()
+        if mutation == "absent":
+            del report["live"]["camera_to_rig"]
+        else:
+            report["live"]["camera_to_rig"] = mutation
+        failures = proof.evaluate_proof(report)
+        assert any("camera_to_rig" in f for f in failures), (
+            f"camera_to_rig mutation {mutation!r} was accepted"
+        )
+
+
+def test_zero_non_numeric_or_bool_camera_samples_fail_closed() -> None:
+    for samples in (0, None, "90", True, 1.5):
+        report = healthy_report()
+        report["live"]["camera_to_rig"]["camera_samples"] = samples
+        failures = proof.evaluate_proof(report)
+        assert any("camera_samples" in f and "camera_to_rig" in f
+                   for f in failures), (
+            f"camera_samples {samples!r} was accepted"
+        )
+
+
+def test_nonzero_missing_acquisition_stamps_fail_closed() -> None:
+    for value in (1, 3, None, True, "0"):
+        report = healthy_report()
+        report["live"]["camera_to_rig"]["missing_acq_stamps"] = value
+        failures = proof.evaluate_proof(report)
+        assert any("missing_acq_stamps" in f for f in failures), (
+            f"missing_acq_stamps {value!r} was accepted"
+        )
+
+
+def test_nonzero_invalid_acquisition_stamps_fail_closed() -> None:
+    for value in (1, 3, None, True, "0"):
+        report = healthy_report()
+        report["live"]["camera_to_rig"]["invalid_acq_stamps"] = value
+        failures = proof.evaluate_proof(report)
+        assert any("invalid_acq_stamps" in f for f in failures), (
+            f"invalid_acq_stamps {value!r} was accepted"
+        )
+
+
+@pytest.mark.parametrize("field", [
+    "avg_camera_ms", "max_camera_ms", "session_max_camera_ms",
+])
+def test_malformed_bool_nonfinite_or_negative_latencies_fail_closed(
+    field: str,
+) -> None:
+    for value in (None, True, "41.0", float("inf"), float("nan"), -1.0):
+        report = healthy_report()
+        report["live"]["camera_to_rig"][field] = value
+        failures = proof.evaluate_proof(report)
+        assert any(field in f and "camera_to_rig" in f for f in failures), (
+            f"{field}={value!r} was accepted"
+        )
+
+
+def test_incoherent_aggregate_ordering_fails_closed() -> None:
+    # avg <= max <= session_max is the only coherent aggregate ordering; a
+    # run whose window max exceeds the session max (or whose average exceeds
+    # its max) has inconsistent aggregates and is never green.
+    for overrides in (
+        {"avg_camera_ms": 50.0},                       # avg > max
+        {"max_camera_ms": 50.0},                       # max > session_max
+        {"avg_camera_ms": 50.0, "max_camera_ms": 50.0},
+    ):
+        report = healthy_report()
+        report["live"]["camera_to_rig"].update(overrides)
+        failures = proof.evaluate_proof(report)
+        assert any("camera_to_rig" in f for f in failures), (
+            f"aggregate overrides {overrides!r} were accepted"
+        )
+    # The inclusive boundary itself stays coherent: equal aggregates pass.
+    equal = healthy_report()
+    equal["live"]["camera_to_rig"].update(
+        {"avg_camera_ms": 41.0, "max_camera_ms": 41.0,
+         "session_max_camera_ms": 41.0}
+    )
+    assert proof.evaluate_proof(equal) == []
+
+
+def test_camera_samples_above_applied_packets_fail_closed() -> None:
+    # Only applied packets can produce valid samples: a sample count above
+    # the applied-packet total is an impossible measurement.
+    report = healthy_report()
+    report["live"]["packets_applied"] = 89
+    failures = proof.evaluate_proof(report)
+    assert any("camera_samples" in f or "camera_to_rig" in f
+               for f in failures), "samples > applied was accepted"
+    assert any("camera" in f.lower() and "applied" in f.lower()
+               for f in failures), failures
+
+
+def test_the_camera_to_rig_block_is_recorded_by_the_pump_without_touching_transport() -> None:
+    # The runtime layer must record the dedicated camera_to_rig block from
+    # the consumer's post-pump stats while the existing transport block is
+    # left unchanged.
+    source = MODULE_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    pump = next(
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "pump_consumer"
+    )
+    body = ast.get_source_segment(source, pump) or ""
+    assert '"camera_to_rig"' in body
+    for stat in ("camera_samples", "missing_acq_stamps", "invalid_acq_stamps",
+                 "avg_camera_ms", "max_camera_ms", "session_max_camera_ms"):
+        assert f"stats.{stat}" in body, (
+            f"pump_consumer must record the final stats.{stat}"
+        )
+    transport = next(
+        node for node in ast.walk(pump)
+        if isinstance(node, ast.Assign)
+        and any(getattr(t, "id", None) == "transport" for t in node.targets)
+    )
+    transport_body = ast.get_source_segment(source, transport) or ""
+    assert "camera" not in transport_body, (
+        "the transport block must stay transport-only"
+    )
+
+
+def test_the_verdict_layer_redecides_the_camera_to_rig_block() -> None:
+    # The verdict helper is a named, unit-testable function wired into the
+    # live failures, so a report that skips the block can never pass.
+    live = {
+        "packets_applied": 90,
+        "camera_to_rig": healthy_camera_to_rig(),
+    }
+    assert proof.camera_to_rig_failures(live) == []
 
 
 # -- bounded waits ---------------------------------------------------------------------
@@ -731,8 +896,11 @@ ARKIT_CATALOG = list(ch.ARKIT_CHANNELS)
 RAW_OBSERVED = sorted((set(ARKIT_CATALOG) - {"tongueOut"}) | {"_neutral"})
 
 
-def test_report_schema_is_bumped_to_v2_for_the_new_coverage_semantics() -> None:
-    assert proof.REPORT_SCHEMA == "realcapture-blender-start-proof/2"
+def test_report_schema_is_bumped_to_v3_for_the_camera_to_rig_contract() -> None:
+    # /2 -> /3: the live evidence contract gains the fail-closed
+    # camera-to-rig acquisition latency block, so old /2 reports can never
+    # be mistaken for a measured /3 run.
+    assert proof.REPORT_SCHEMA == "realcapture-blender-start-proof/3"
 
 
 def test_honest_51_of_52_producer_coverage_passes_the_full_proof() -> None:

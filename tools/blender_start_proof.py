@@ -34,10 +34,13 @@ proof records observed evidence, never an assumption):
 6.  In background mode the harness manually pumps the installed consumer's
     ``_tick()`` for a bounded duration while the REAL backend owns camera 0.
     No synthetic sender exists in real mode. It records applied packet
-    samples, fps, transport latency, the dashboard's camera/packets/Blender
-    lights verbatim, controller properties as diagnostics, and the ACTUAL
-    rig target movement: accumulated non-Basis shape-key deviations over the
-    whole window. Controller or metadata jitter alone can never green the
+    samples, fps, transport latency, the dedicated fail-closed
+    camera-to-rig acquisition latency block (valid samples, missing/invalid
+    acquisition stamps, rolling avg/max and session max ms — availability
+    and consistency only, no roadmap threshold), the dashboard's
+    camera/packets/Blender lights verbatim, controller properties as
+    diagnostics, and the ACTUAL rig target movement: accumulated non-Basis
+    shape-key deviations over the whole window. Controller or metadata jitter alone can never green the
     movement gate. Raw observed producer channel names are the exact
     ``rc_shape_`` keys in the consumer's ``_last_values`` after the pump —
     data THIS run wrote, never pre-existing properties, pose keys, or
@@ -91,7 +94,10 @@ RC_EXTENSION_MODULE = "bl_ext.user_default.realcapture"
 #: The dev-package module that must never be substituted for the installed one.
 DEV_PACKAGE_MODULE = "addon"
 
-REPORT_SCHEMA = "realcapture-blender-start-proof/2"
+#: /3: the live evidence contract gains the fail-closed camera-to-rig
+#: acquisition latency block, so a /2 report can never be mistaken for a
+#: measured /3 run.
+REPORT_SCHEMA = "realcapture-blender-start-proof/3"
 
 #: The exact configured catalog size the C4 proof is defined against: the
 #: full ARKit-52 vocabulary. C4 is specifically the installed default
@@ -529,6 +535,89 @@ def lights_failures(dashboard: dict) -> list[str]:
     return failures
 
 
+def camera_to_rig_failures(live: dict) -> list[str]:
+    """Failures for the camera-to-rig acquisition latency block.
+
+    The block is a distinct fail-closed proof field, separate from the
+    transport-only latency: it must exist, carry a positive integer count of
+    valid camera samples, ZERO missing and ZERO invalid acquisition stamps,
+    and finite non-negative latencies whose aggregates are coherent
+    (``avg <= max <= session_max``). A sample count above the applied-packet
+    total is an impossible measurement. This proves measurement AVAILABILITY
+    and CONSISTENCY only; no roadmap threshold (such as 60 ms) is judged
+    here — that decision owns a separate task.
+    """
+    failures: list[str] = []
+    block = live.get("camera_to_rig")
+    if not isinstance(block, dict):
+        failures.append(
+            "the camera_to_rig acquisition latency block is absent or "
+            "malformed; absence is never green"
+        )
+        return failures
+    samples = block.get("camera_samples")
+    if isinstance(samples, bool) or not isinstance(samples, int) or samples <= 0:
+        failures.append(
+            f"camera_to_rig camera_samples is {samples!r}; a measured run "
+            "requires a positive integer count of valid camera samples"
+        )
+    for field in ("missing_acq_stamps", "invalid_acq_stamps"):
+        value = block.get(field)
+        if isinstance(value, bool) or not isinstance(value, int):
+            failures.append(
+                f"camera_to_rig field {field!r} is {value!r}; an integer "
+                "count is required"
+            )
+        elif value != 0:
+            failures.append(
+                f"camera_to_rig field {field!r} is {value!r}; a proven run "
+                "requires zero unusable acquisition stamps"
+            )
+    latencies: dict[str, float] = {}
+    for field in ("avg_camera_ms", "max_camera_ms", "session_max_camera_ms"):
+        value = block.get(field)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or float(value) < 0.0
+        ):
+            failures.append(
+                f"camera_to_rig field {field!r} is {value!r}; a finite, "
+                "non-negative latency measurement is required"
+            )
+        else:
+            latencies[field] = float(value)
+    if len(latencies) == 3:
+        if latencies["avg_camera_ms"] > latencies["max_camera_ms"]:
+            failures.append(
+                "camera_to_rig aggregates are incoherent: avg_camera_ms "
+                f"({latencies['avg_camera_ms']!r}) exceeds max_camera_ms "
+                f"({latencies['max_camera_ms']!r})"
+            )
+        if latencies["max_camera_ms"] > latencies["session_max_camera_ms"]:
+            failures.append(
+                "camera_to_rig aggregates are incoherent: max_camera_ms "
+                f"({latencies['max_camera_ms']!r}) exceeds "
+                "session_max_camera_ms "
+                f"({latencies['session_max_camera_ms']!r})"
+            )
+    applied = live.get("packets_applied")
+    if (
+        isinstance(samples, int)
+        and not isinstance(samples, bool)
+        and samples > 0
+        and isinstance(applied, (int, float))
+        and not isinstance(applied, bool)
+        and samples > applied
+    ):
+        failures.append(
+            f"camera_to_rig camera_samples ({samples!r}) exceeds the "
+            f"applied-packet total ({applied!r}); an impossible measurement"
+        )
+    return failures
+
+
 def live_failures(live: dict) -> list[str]:
     """Failures for the live-run block: progression, application, movement."""
     failures: list[str] = []
@@ -550,6 +639,7 @@ def live_failures(live: dict) -> list[str]:
             "rig target (non-Basis shape key) deviation was recorded, so "
             "the movement gate is not met (metadata jitter is never movement)"
         )
+    failures += camera_to_rig_failures(live)
     return failures
 
 
@@ -855,6 +945,24 @@ def self_test() -> list[str]:
     mutated = _self_test_report()
     mutated["cleanup"]["pid_check"]["alive"] = True
     expect(evaluate_proof(mutated), "alive PID not caught")
+    unmeasured = _self_test_report()
+    del unmeasured["live"]["camera_to_rig"]
+    expect(any("camera_to_rig" in f for f in evaluate_proof(unmeasured)),
+           "an absent camera_to_rig block was accepted")
+    zero_samples = _self_test_report()
+    zero_samples["live"]["camera_to_rig"]["camera_samples"] = 0
+    expect(any("camera_samples" in f
+               for f in evaluate_proof(zero_samples)),
+           "zero camera samples were accepted")
+    unusable = _self_test_report()
+    unusable["live"]["camera_to_rig"]["invalid_acq_stamps"] = 1
+    expect(any("invalid_acq_stamps" in f
+               for f in evaluate_proof(unusable)),
+           "an invalid acquisition stamp was accepted")
+    incoherent = _self_test_report()
+    incoherent["live"]["camera_to_rig"]["max_camera_ms"] = 99.0
+    expect(any("incoherent" in f for f in evaluate_proof(incoherent)),
+           "incoherent camera latency aggregates were accepted")
     return failures
 
 
@@ -881,6 +989,14 @@ def _self_test_report() -> dict:
         "live": {
             "packet_samples": [1, 2],
             "packets_applied": 2,
+            "camera_to_rig": {
+                "camera_samples": 2,
+                "missing_acq_stamps": 0,
+                "invalid_acq_stamps": 0,
+                "avg_camera_ms": 33.0,
+                "max_camera_ms": 34.0,
+                "session_max_camera_ms": 34.0,
+            },
             "movement": {
                 "moved": True,
                 "peak_deviations": {"shapekey::jawOpen": 0.5},
@@ -1217,12 +1333,28 @@ def pump_consumer(duration_s: float) -> dict:
         "applied_fps": stats.applied_fps,
         "engine": stats.engine,
     }
+
+    # Camera-to-rig acquisition latency: a distinct fail-closed proof field,
+    # recorded from the FINAL post-pump stats as JSON-safe primitives (None
+    # only when a latency was never measurable; the verdict fails closed on
+    # that when valid samples exist). The transport block above stays
+    # transport-only. No roadmap threshold is judged here: this proves
+    # measurement availability and consistency, not the threshold owner.
+    camera_to_rig = {
+        "camera_samples": int(stats.camera_samples),
+        "missing_acq_stamps": int(stats.missing_acq_stamps),
+        "invalid_acq_stamps": int(stats.invalid_acq_stamps),
+        "avg_camera_ms": _json_latency(stats.avg_camera_ms),
+        "max_camera_ms": _json_latency(stats.max_camera_ms),
+        "session_max_camera_ms": _json_latency(stats.session_max_camera_ms),
+    }
     return {
         "pump_seconds": duration_s,
         "ticks": ticks,
         "packets_applied": stats.packets_applied - applied_at_start,
         "packet_samples": packet_samples,
         "transport": transport,
+        "camera_to_rig": camera_to_rig,
         "props_before": props_before,
         "props_after": props_after,
         "controller_changed": changed,  # diagnostics only
@@ -1236,6 +1368,17 @@ def pump_consumer(duration_s: float) -> dict:
         "raw_observed_channels": len(observed_names),
         "raw_observed_channel_names": observed_names,
     }
+
+
+def _json_latency(value: object) -> float | None:
+    """A JSON-safe latency primitive, or ``None`` when never measurable."""
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+    ):
+        return None
+    return float(value)
 
 
 def _controller_props(controller) -> dict:  # noqa: ANN001 - bpy Object
