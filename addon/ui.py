@@ -10,6 +10,7 @@ from . import backend_process, cockpit, dashboard_client
 from .cockpit import CockpitError
 from .consumer import CaptureConsumer
 from .session import SessionError, SessionRecorder
+from .telemetry import CAMERA_STATE_INVALID, CAMERA_STATE_MEASURED_INVALID, camera_latency_state
 
 _consumer: CaptureConsumer | None = None
 _process: backend_process.BackendProcess | None = None
@@ -293,6 +294,18 @@ class RC_PT_main_panel(bpy.types.Panel):
         box.label(text=f"Applied FPS: {stats.applied_fps:.1f}")
         box.label(text=f"Packets: {stats.packets_applied}")
         box.label(text=f"Transport: avg {stats.avg_transport_ms:.1f} ms / max {stats.max_transport_ms:.1f} ms")
+        # Camera-to-rig latency renders four truthful states (measured /
+        # measured-with-invalid / unavailable / invalid); it never shows a
+        # healthy-looking 0 ms when no valid acquisition stamp was seen. The
+        # state/text derivation is pure logic in telemetry.py, tested without
+        # bpy. ERROR marks every state carrying invalid stamps.
+        camera_state, camera_text = camera_latency_state(stats)
+        box.label(
+            text=camera_text,
+            icon="ERROR"
+            if camera_state in (CAMERA_STATE_INVALID, CAMERA_STATE_MEASURED_INVALID)
+            else "NONE",
+        )
         if stats.invalid_packets:
             box.label(text=f"Invalid packets: {stats.invalid_packets}", icon="ERROR")
         if stats.packets_dropped_stale:
